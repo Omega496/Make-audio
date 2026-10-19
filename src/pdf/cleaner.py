@@ -382,7 +382,27 @@ def clean_markdown_for_tts(markdown_text: str, remove_display_equations: bool = 
     text = re.sub(r'\[\s*\]', '', text)
     text = re.sub(r'[ \t]+([.,!?:;])', r'\1', text)
 
-    # Clean up paragraph spacing
+    # Clean up paragraph spacing and chunk long blocks
+    def _split_long_para(para: str, max_chars: int = 400) -> list:
+        if len(para) <= max_chars:
+            return [para]
+        sentences = re.split(r'(?<=[.!?])\s+', para)
+        chunks = []
+        cur = []
+        cur_len = 0
+        for s in sentences:
+            s_len = len(s)
+            if cur and (cur_len + s_len > max_chars):
+                chunks.append(" ".join(cur))
+                cur = [s]
+                cur_len = s_len
+            else:
+                cur.append(s)
+                cur_len += s_len
+        if cur:
+            chunks.append(" ".join(cur))
+        return chunks
+
     raw_paragraphs = text.split('\n')
     cleaned_paragraphs = []
     current_para = []
@@ -396,14 +416,14 @@ def clean_markdown_for_tts(markdown_text: str, remove_display_equations: bool = 
                 para_text = ' '.join(current_para)
                 para_text = re.sub(r'\s+', ' ', para_text).strip()
                 if para_text:
-                    cleaned_paragraphs.append(para_text)
+                    cleaned_paragraphs.extend(_split_long_para(para_text))
                 current_para = []
 
     if current_para:
         para_text = ' '.join(current_para)
         para_text = re.sub(r'\s+', ' ', para_text).strip()
         if para_text:
-            cleaned_paragraphs.append(para_text)
+            cleaned_paragraphs.extend(_split_long_para(para_text))
 
     cleaned_text = '\n\n'.join(cleaned_paragraphs)
     return cleaned_text
