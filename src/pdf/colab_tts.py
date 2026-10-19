@@ -86,8 +86,9 @@ class ColabTTS:
             if self.verbose:
                 print(f"[colab-client] Using active Colab session '{self.session_name}'.")
         else:
-            print(f"[colab-client] Provisioning Colab session '{self.session_name}'" +
-                  (f" with {self.gpu} GPU..." if self.gpu else "..."))
+            if self.verbose:
+                print(f"[colab-client] Provisioning Colab session '{self.session_name}'" +
+                      (f" with {self.gpu} GPU..." if self.gpu else "..."))
             cmd = ["colab", "new", "-s", self.session_name]
             if self.gpu:
                 cmd.extend(["--gpu", self.gpu])
@@ -96,7 +97,8 @@ class ColabTTS:
             if res.returncode != 0:
                 err_msg = (res.stderr or res.stdout).strip()
                 if self.gpu:
-                    print(f"[colab-client] Warning: GPU allocation failed ({err_msg}). Falling back to CPU...")
+                    if self.verbose:
+                        print(f"[colab-client] Warning: GPU allocation failed ({err_msg}). Falling back to CPU...")
                     cmd_cpu = ["colab", "new", "-s", self.session_name]
                     res_cpu = subprocess.run(cmd_cpu, capture_output=True, text=True)
                     if res_cpu.returncode != 0:
@@ -106,7 +108,8 @@ class ColabTTS:
                 else:
                     raise ColabTTSError(f"Failed to create Colab session: {err_msg}")
 
-            print(f"[colab-client] Colab session '{self.session_name}' created successfully.")
+            if self.verbose:
+                print(f"[colab-client] Colab session '{self.session_name}' created successfully.")
 
         self._ensure_remote_dependencies()
 
@@ -123,7 +126,8 @@ class ColabTTS:
                 print("[colab-client] Remote dependencies verified.")
             return
 
-        print("[colab-client] Installing remote dependencies on Colab VM (kokoro, soundfile, espeakng-loader)...")
+        if self.verbose:
+            print("[colab-client] Installing remote dependencies on Colab VM (kokoro, soundfile, espeakng-loader)...")
         install_proc = subprocess.run(
             ["colab", "install", "-s", self.session_name, "kokoro>=0.9.4", "soundfile>=0.14.0", "espeakng-loader"],
             capture_output=not self.verbose,
@@ -132,7 +136,8 @@ class ColabTTS:
         if install_proc.returncode != 0:
             err = install_proc.stderr if hasattr(install_proc, "stderr") else "Installation failed"
             raise ColabTTSError(f"Failed to install dependencies on Colab VM: {err}")
-        print("[colab-client] Remote dependencies installed successfully.")
+        if self.verbose:
+            print("[colab-client] Remote dependencies installed successfully.")
 
     def convert_to_audio_file(
         self,
@@ -161,6 +166,7 @@ class ColabTTS:
             "speed": speed,
             "pause_between_paragraphs": pause_between_paragraphs,
             "output_path": remote_output_wav,
+            "verbose": self.verbose,
         }
 
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
@@ -169,7 +175,8 @@ class ColabTTS:
 
         try:
             # Step 3: Upload job file to Colab
-            print("[colab-client] Uploading narration payload to Colab...")
+            if self.verbose:
+                print("[colab-client] Uploading narration payload to Colab...")
             upload_res = subprocess.run(
                 ["colab", "upload", "-s", self.session_name, local_job_path, "/content/make_audio_job.json"],
                 capture_output=True,
@@ -179,7 +186,6 @@ class ColabTTS:
                 raise ColabTTSError(f"Failed to upload job to Colab: {upload_res.stderr or upload_res.stdout}")
 
             # Step 4: Run remote worker via colab exec
-            # Adjust timeout proportionally to text word count if needed (default: self.timeout)
             word_count = len(text.split())
             estimated_timeout = max(self.timeout, float(word_count * 2.0))
             if self.verbose:
@@ -192,7 +198,6 @@ class ColabTTS:
                 "--timeout", str(estimated_timeout),
             ]
 
-            # Stream output live so user can see progress
             proc = subprocess.Popen(
                 exec_cmd,
                 stdout=subprocess.PIPE,
@@ -202,22 +207,27 @@ class ColabTTS:
             )
 
             worker_success = False
+            captured_lines = []
             for line in proc.stdout:
                 line_str = line.strip()
                 if line_str:
-                    print(line_str)
+                    captured_lines.append(line_str)
                 if "[colab-worker] SUCCESS" in line_str:
                     worker_success = True
+                elif self.verbose and line_str:
+                    print(line_str)
 
             proc.wait()
             if proc.returncode != 0 or not worker_success:
+                err_details = "\n".join(captured_lines)
                 raise ColabTTSError(
-                    f"Remote Kokoro synthesis failed with exit code {proc.returncode}"
+                    f"Remote Kokoro synthesis failed (exit code {proc.returncode}):\n{err_details}"
                 )
 
             # Step 5: Download generated audio
             local_wav = output_path.with_suffix(".wav")
-            print(f"[colab-client] Downloading generated audio from Colab...")
+            if self.verbose:
+                print(f"[colab-client] Downloading generated audio from Colab...")
             download_res = subprocess.run(
                 ["colab", "download", "-s", self.session_name, remote_output_wav, str(local_wav)],
                 capture_output=True,
@@ -240,7 +250,8 @@ class ColabTTS:
                     local_wav.unlink(missing_ok=True)
                     final_path = output_path
                 except (subprocess.SubprocessError, FileNotFoundError):
-                    print("[colab-client] ffmpeg not available for mp3 encoding; keeping .wav format.")
+                    if self.verbose:
+                        print("[colab-client] ffmpeg not available for mp3 encoding; keeping .wav format.")
                     final_path = local_wav
             else:
                 final_path = local_wav
@@ -257,18 +268,19 @@ class ColabTTS:
 
             # Step 7: Teardown session if requested
             if stop_session_after:
-                self.stop_session(self.session_name)
+                self.stop_session(self.session_name, verbose=self.verbose)
 
     @classmethod
-    def stop_session(cls, session_name: str = "make-audio") -> bool:
-        """Terminate a running Colab session."""
-        print(f"[colab-client] Stopping Colab session '{session_name}'...")
+    def stop_session(cls, session_name: str = "make-audio", verbose: bool = False) -> bool:
+        """Terminate a running Colab session quietly unless verbose is set."""
+        if verbose:
+            print(f"[colab-client] Stopping Colab session '{session_name}'...")
         res = subprocess.run(
             ["colab", "stop", "-s", session_name],
             capture_output=True,
             text=True,
         )
         output = (res.stdout + res.stderr).strip()
-        if output:
+        if verbose and output:
             print(f"[colab-client] {output}")
         return res.returncode == 0

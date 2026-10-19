@@ -214,7 +214,7 @@ def main():
 
     # Handle quick command: stop colab session
     if args.stop_colab:
-        ColabTTS.stop_session(args.colab_session)
+        ColabTTS.stop_session(args.colab_session, verbose=args.verbose)
         return
 
     if not args.input:
@@ -229,7 +229,8 @@ def main():
 
     is_batch = len(files_to_process) > 1 or (len(args.input) == 1 and Path(args.input[0]).is_dir())
     if is_batch:
-        print(f"Found {len(files_to_process)} file(s) to convert (engine: {args.engine}):")
+        engine_str = f" (engine: {args.engine})" if args.verbose else ""
+        print(f"Found {len(files_to_process)} file(s) to convert{engine_str}:")
         for f in files_to_process:
             print(f"  • {f.name}")
 
@@ -248,7 +249,8 @@ def main():
             if is_batch:
                 print(f"\n[{idx}/{total_files}] Converting: {file_path.name}")
             else:
-                print(f"Converting: {file_path.name} (engine: {args.engine})")
+                engine_str = f" (engine: {args.engine})" if args.verbose else ""
+                print(f"Converting: {file_path.name}{engine_str}")
 
             # Extract raw text
             if file_path.suffix.lower() == ".pdf":
@@ -331,7 +333,7 @@ def main():
     finally:
         # Automatically stop Colab session when done unless user specifically asked to keep it
         if args.engine == "colab" and not args.keep_colab:
-            ColabTTS.stop_session(args.colab_session)
+            ColabTTS.stop_session(args.colab_session, verbose=args.verbose)
 
 
 if __name__ == "__main__":

@@ -9,31 +9,57 @@ with CUDA GPU acceleration, synthesizes the audio, and writes
 """
 
 import json
+import logging
 import os
 import sys
 import time
+import warnings
+from contextlib import contextmanager
 from pathlib import Path
 
-# Silence external warnings
-import warnings
+# Silence external warnings and logs
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
-# Setup espeakng-loader if available
-try:
-    import espeakng_loader
-    from phonemizer.backend.espeak.wrapper import EspeakWrapper
-    EspeakWrapper.set_library(espeakng_loader.get_library_path())
-    EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
-except Exception:
-    pass
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("phonemizer").setLevel(logging.ERROR)
+logging.getLogger("kokoro").setLevel(logging.ERROR)
 
-import numpy as np
-import soundfile as sf
-import torch
-from kokoro import KPipeline
+
+@contextmanager
+def suppress_fd():
+    """Context manager to completely suppress low-level C/Rust stdout and stderr."""
+    null_fd = os.open(os.devnull, os.O_RDWR)
+    save_stdout = os.dup(1)
+    save_stderr = os.dup(2)
+    try:
+        os.dup2(null_fd, 1)
+        os.dup2(null_fd, 2)
+        yield
+    finally:
+        os.dup2(save_stdout, 1)
+        os.dup2(save_stderr, 2)
+        os.close(null_fd)
+        os.close(save_stdout)
+        os.close(save_stderr)
+
+
+with suppress_fd():
+    try:
+        import espeakng_loader
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper
+        EspeakWrapper.set_library(espeakng_loader.get_library_path())
+        EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+    except Exception:
+        pass
+
+    import numpy as np
+    import soundfile as sf
+    import torch
+    from kokoro import KPipeline
 
 
 def run_worker():
@@ -50,6 +76,7 @@ def run_worker():
     speed = float(job.get("speed", 1.0))
     pause_between_paragraphs = float(job.get("pause_between_paragraphs", 0.25))
     output_path = Path(job.get("output_path", "/content/make_audio_output.wav"))
+    verbose = job.get("verbose", False)
 
     if not text:
         print("[colab-worker] ERROR: Input text is empty.", file=sys.stderr)
@@ -60,44 +87,48 @@ def run_worker():
     word_count = sum(len(p.split()) for p in paragraphs)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[colab-worker] Compute device: {device.upper()}")
-    if device == "cuda":
-        print(f"[colab-worker] GPU: {torch.cuda.get_device_name(0)}")
+    if verbose:
+        print(f"[colab-worker] Compute device: {device.upper()}")
+        if device == "cuda":
+            print(f"[colab-worker] GPU: {torch.cuda.get_device_name(0)}")
+        print(f"[colab-worker] Initializing Kokoro pipeline (voice: {voice}, speed: {speed})...")
 
-    print(f"[colab-worker] Initializing Kokoro pipeline (voice: {voice}, speed: {speed})...")
-    start_init = time.time()
-    pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", device=device)
-    print(f"[colab-worker] Pipeline ready in {time.time() - start_init:.2f}s")
+    with suppress_fd():
+        pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", device=device)
 
     sample_rate = 24000
     silence_samples = int(sample_rate * pause_between_paragraphs)
     silence = np.zeros(silence_samples, dtype=np.float32) if silence_samples > 0 else None
 
-    print(f"[colab-worker] Synthesizing {total_paras} paragraphs ({word_count} words)...")
+    if verbose:
+        print(f"[colab-worker] Synthesizing {total_paras} paragraphs ({word_count} words)...")
+
     all_chunks = []
     start_synth = time.time()
 
     for p_idx, paragraph in enumerate(paragraphs, 1):
-        clean_snippet = paragraph.replace("\n", " ").strip()
-        if len(clean_snippet) > 60:
-            clean_snippet = clean_snippet[:57] + "..."
-        pct = (p_idx / total_paras) * 100
-        print(f"[colab-worker] [{pct:5.1f}%] [{p_idx:02d}/{total_paras:02d}] Generating: \"{clean_snippet}\"")
+        if verbose:
+            clean_snippet = paragraph.replace("\n", " ").strip()
+            if len(clean_snippet) > 60:
+                clean_snippet = clean_snippet[:57] + "..."
+            pct = (p_idx / total_paras) * 100
+            print(f"[colab-worker] [{pct:5.1f}%] [{p_idx:02d}/{total_paras:02d}] Generating: \"{clean_snippet}\"")
 
-        generator = pipeline(
-            paragraph,
-            voice=voice,
-            speed=speed,
-            split_pattern=r"\n+",
-        )
-        para_chunks = []
-        for res in generator:
-            if res.audio is not None:
-                if isinstance(res.audio, torch.Tensor):
-                    chunk_np = res.audio.detach().cpu().numpy()
-                else:
-                    chunk_np = np.array(res.audio, dtype=np.float32)
-                para_chunks.append(chunk_np)
+        with suppress_fd():
+            generator = pipeline(
+                paragraph,
+                voice=voice,
+                speed=speed,
+                split_pattern=r"\n+",
+            )
+            para_chunks = []
+            for res in generator:
+                if res.audio is not None:
+                    if isinstance(res.audio, torch.Tensor):
+                        chunk_np = res.audio.detach().cpu().numpy()
+                    else:
+                        chunk_np = np.array(res.audio, dtype=np.float32)
+                    para_chunks.append(chunk_np)
 
         if para_chunks:
             all_chunks.append(np.concatenate(para_chunks, axis=0))
@@ -105,7 +136,6 @@ def run_worker():
                 all_chunks.append(silence)
 
     if not all_chunks:
-        print("[colab-worker] WARNING: No audio chunks produced.", file=sys.stderr)
         final_audio = np.zeros(0, dtype=np.float32)
     else:
         final_audio = np.concatenate(all_chunks, axis=0)
@@ -115,10 +145,13 @@ def run_worker():
     rtf = elapsed / duration_sec if duration_sec > 0 else 0
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(output_path), final_audio, sample_rate)
+    with suppress_fd():
+        sf.write(str(output_path), final_audio, sample_rate)
 
-    print(f"[colab-worker] Synthesis completed in {elapsed:.2f}s (audio duration: {duration_sec:.1f}s, RTF: {rtf:.3f})")
-    print(f"[colab-worker] Audio saved to: {output_path}")
+    if verbose:
+        print(f"[colab-worker] Synthesis completed in {elapsed:.2f}s (audio duration: {duration_sec:.1f}s, RTF: {rtf:.3f})")
+        print(f"[colab-worker] Audio saved to: {output_path}")
+
     print("[colab-worker] SUCCESS")
 
 
