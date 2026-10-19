@@ -1,11 +1,22 @@
-# Document to Audio (Kokoro-TTS)
+# Document to Audio (Kokoro-TTS with Google Colab Acceleration)
 
 Convert complex academic Markdown (`.md`) and research paper PDF (`.pdf`) files containing LaTeX formulas, physics notation, tables, and markup into natural, fluent plain-English audio using [Kokoro-TTS](https://github.com/hexgrad/kokoro).
+
+Supports **Google Colab Cloud GPU acceleration** (default) via [Google Colab CLI](https://github.com/googlecolab/google-colab-cli), as well as local hardware synthesis.
 
 ---
 
 ## 🚀 Features
 
+- **Google Colab Cloud GPU Acceleration (Default):**
+  - Runs heavy Kokoro neural TTS synthesis remotely on Google Colab's cloud GPUs (e.g. NVIDIA T4).
+  - Offloads compute and RAM from your local computer.
+  - Keeps sessions warm for lightning-fast consecutive document synthesis without re-provisioning.
+  - Easy session teardown anytime with `make_audio --stop-colab`.
+- **Dual-Engine & Automatic Fallback:**
+  - `--engine colab`: (default) GPU-accelerated cloud synthesis on Colab.
+  - `--engine local`: run directly on your machine's local hardware (PyTorch + Kokoro).
+  - `--fallback-local`: automatically falls back to your local hardware if Google Colab is offline or reaches quota.
 - **Supports Both `.md` and `.pdf` Files:**
   - Directly process Markdown files or academic research PDF papers.
   - Page selection (`--pages 1`, `--pages 1-3`, etc.) so you can synthesize specific sections or entire papers.
@@ -23,48 +34,74 @@ Convert complex academic Markdown (`.md`) and research paper PDF (`.pdf`) files 
   - Automatically paces paragraphs with subtle natural pauses.
 - **Kokoro-TTS Engine:**
   - Default voice: `af_heart` (American English female, high quality).
-  - CUDA GPU acceleration (with automatic CPU fallback).
-  - High performance: synthesizes ~15 minutes of audio in under 30 seconds on GPU.
-- **Output Formats:**
-  - Generates standard `.wav` (24kHz 16-bit PCM) or `.mp3` (via ffmpeg).
-  - Saves the cleaned plain-English text alongside the audio for verification.
+  - Supported formats: `.wav` (24kHz 16-bit PCM) or `.mp3` (via ffmpeg).
 
 ---
 
 ## 🛠️ Usage
 
-### Global CLI Command (`make_audio`)
+### Quick Start (Colab Cloud GPU by default)
 
-You can run `make_audio` from **any folder** in your terminal. The generated audio will automatically be saved into whatever folder you are currently in:
+Run `make_audio` (or `make-audio`) from any folder in your terminal:
 
 ```bash
-# Convert a Markdown file from your current folder:
+# Convert a Markdown file using Google Colab GPU:
 make_audio notes.md
 
-# Convert a PDF file from your current folder:
+# Convert a PDF file:
 make_audio paper.pdf
-
-# Convert a file from another directory (saves in your current folder):
-make_audio /path/to/documents/explanation.md
 
 # Convert specific pages of a PDF:
 make_audio paper.pdf --pages 1-3
 ```
 
-*(You can also use `make-audio` or `python md_to_audio.py` inside the project folder).*
+### Stop / Teardown Colab Session
+
+When you are done converting your documents, stop the Colab VM runtime to release compute units:
+
+```bash
+make_audio --stop-colab
+```
+
+Or pass `--stop-session` to automatically shut down the VM right after finishing:
+
+```bash
+make_audio notes.md --stop-session
+```
+
+---
+
+### Switching to Local Hardware
+
+If you ever want to run TTS locally on your own machine instead of Google Colab:
+
+```bash
+# Run on local hardware for a single command:
+make_audio notes.md --engine local
+
+# Or automatically fall back to local hardware if Colab fails or is offline:
+make_audio notes.md --fallback-local
+
+# Or set local engine as your default in your shell:
+export MAKE_AUDIO_ENGINE=local
+```
 
 ---
 
 ### CLI Options
 
 ```text
-usage: md-to-audio [-h] [-o OUTPUT] [-v VOICE] [-s SPEED] [-p PAGES]
-                   [-d {cuda,cpu}] [--keep-display-math] [--keep-references]
-                   [--save-cleaned-text] [--no-save-cleaned-text] [--preview]
-                   [input]
+usage: make-audio [-h] [-o OUTPUT] [-v VOICE] [-s SPEED] [-p PAGES]
+                  [-d {cuda,cpu}] [--engine {colab,local}]
+                  [--colab-session COLAB_SESSION] [--colab-gpu COLAB_GPU]
+                  [--colab-timeout COLAB_TIMEOUT] [--stop-session]
+                  [--stop-colab] [--fallback-local] [--keep-display-math]
+                  [--keep-references] [--save-cleaned-text] [--preview]
+                  [--verbose]
+                  [input]
 
 positional arguments:
-  input                 Path to .md or .pdf file (default: explanation.md)
+  input                 Path to the .md or .pdf file to convert
 
 options:
   -h, --help            Show help message and exit
@@ -72,42 +109,44 @@ options:
   -v, --voice VOICE     Kokoro voice pack (default: af_heart)
   -s, --speed SPEED     Speaking speed multiplier (default: 1.0)
   -p, --pages PAGES     For PDF: page range (e.g. '1', '1-3', '1,3,5')
-  -d, --device DEVICE   Device: 'cuda' or 'cpu' (default: auto)
+  -d, --device DEVICE   For local engine: 'cuda' or 'cpu' (default: auto)
+  --engine {colab,local}
+                        TTS engine: 'colab' (default) or 'local'
+  --colab-session NAME  Colab session name (default: make-audio)
+  --colab-gpu GPU       Colab GPU variant: 'T4' (default), 'L4', 'A100', 'none'
+  --colab-timeout SECS  Timeout in seconds for Colab synthesis (default: 600.0)
+  --stop-session        Stop Colab VM after finishing this audio file
+  --stop-colab          Stop the active Colab VM immediately and exit
+  --fallback-local      Automatically fallback to local machine if Colab fails
   --keep-display-math   Spoken display math instead of omitting
   --keep-references     Keep bibliography/references section in PDFs
-  --save-cleaned-text   Save cleaned plain-English text (default: True)
-  --preview             Display cleaned text without generating audio
+  --save-cleaned-text   Save cleaned plain-English text (.txt)
+  --preview             Display cleaned text preview without generating audio
+  --verbose             Show detailed synthesis progress and specifications
 ```
 
-### Examples
+---
 
-1. **Convert Page 1 of a PDF paper:**
-   ```bash
-   python md_to_audio.py "Deep Learning the Morphology of Dark Matter Substructure.pdf" --pages 1
-   ```
+## ⏪ Reverting / Rollback to Pristine Local Baseline
 
-2. **Preview cleaned text of a PDF or Markdown before generating audio:**
-   ```bash
-   python md_to_audio.py "Deep Learning the Morphology of Dark Matter Substructure.pdf" --pages 1 --preview
-   ```
+A permanent Git baseline was saved before making any Colab changes. If you ever decide you prefer the original 100% local project state, you can revert completely with:
 
-3. **Convert any Markdown file to audio:**
-   ```bash
-   python md_to_audio.py my_notes.md -o my_notes.wav
-   ```
+```bash
+# Switch to the untouched original baseline branch:
+git checkout backup-local
 
-4. **Change speaking voice or speed:**
-   ```bash
-   python md_to_audio.py explanation.md -v af_heart -s 1.1 -o output_fast.wav
-   ```
+# Or reset main branch to the pristine baseline tag:
+git reset --hard v0.1.0-local-baseline
+```
 
 ---
 
 ## 📂 Project Structure
 
-- [`md_to_audio.py`](file:///home/omega496/Documents/GSOC/deeplance/paper/PDF/md_to_audio.py): CLI launcher script.
-- [`src/pdf/cleaner.py`](file:///home/omega496/Documents/GSOC/deeplance/paper/PDF/src/pdf/cleaner.py): Markdown, LaTeX, and formula cleaning engine.
-- [`src/pdf/pdf_extractor.py`](file:///home/omega496/Documents/GSOC/deeplance/paper/PDF/src/pdf/pdf_extractor.py): PDF text extraction, de-hyphenation, and layout unwrapping.
-- [`src/pdf/tts.py`](file:///home/omega496/Documents/GSOC/deeplance/paper/PDF/src/pdf/tts.py): Kokoro-TTS wrapper with paragraph pacing and progress reporting.
-- [`explanation.md`](file:///home/omega496/Documents/GSOC/deeplance/paper/PDF/explanation.md): Sample input explanation markdown.
-- [`explanation.wav`](file:///home/omega496/Documents/GSOC/deeplance/paper/PDF/explanation.wav): Generated 15-minute audio narration.
+- [`md_to_audio.py`](file:///home/omega496/make_audio/md_to_audio.py): Root CLI launcher script.
+- [`src/pdf/md_to_audio.py`](file:///home/omega496/make_audio/src/pdf/md_to_audio.py): Main CLI entry point and engine dispatcher.
+- [`src/pdf/colab_tts.py`](file:///home/omega496/make_audio/src/pdf/colab_tts.py): Google Colab CLI orchestrator (VM provisioning, payload transfer, remote execution, and download).
+- [`src/pdf/colab_worker.py`](file:///home/omega496/make_audio/src/pdf/colab_worker.py): Remote GPU worker script executed on the Colab VM.
+- [`src/pdf/tts.py`](file:///home/omega496/make_audio/src/pdf/tts.py): Original local Kokoro-TTS engine wrapper (fully preserved).
+- [`src/pdf/cleaner.py`](file:///home/omega496/make_audio/src/pdf/cleaner.py): Markdown, LaTeX, and formula cleaning engine.
+- [`src/pdf/pdf_extractor.py`](file:///home/omega496/make_audio/src/pdf/pdf_extractor.py): PDF text extraction and layout unwrapping.

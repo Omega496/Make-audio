@@ -1,28 +1,32 @@
 #!/usr/bin/env python3
 """
-Document to Audio CLI tool using Kokoro-TTS.
+Document to Audio CLI tool with Google Colab and Local Kokoro-TTS.
 
 Takes a Markdown (.md) or PDF (.pdf) file containing LaTeX math, academic notes,
 tables, and formatting, cleans it into natural spoken English, and generates
-high-quality audio using Kokoro-TTS (default voice: af_heart).
+high-quality audio using Google Colab GPU (default) or local Kokoro-TTS.
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
 from pdf.cleaner import clean_markdown_for_tts
+from pdf.colab_tts import ColabTTS, ColabTTSError
 from pdf.pdf_extractor import extract_text_from_pdf
 from pdf.tts import KokoroTTS
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Convert Markdown (.md) or PDF (.pdf) files into natural plain-English audio using Kokoro-TTS."
+        description="Convert Markdown (.md) or PDF (.pdf) files into natural plain-English audio using Google Colab or local Kokoro-TTS."
     )
     parser.add_argument(
         "input",
+        nargs="?",
+        default=None,
         help="Path to the .md or .pdf file to convert",
     )
     parser.add_argument(
@@ -55,7 +59,45 @@ def parse_args():
         "--device",
         choices=["cuda", "cpu"],
         default=None,
-        help="Computation device (default: auto-detected, uses CUDA if available)",
+        help="For local engine: computation device (default: auto-detected, uses CUDA if available)",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["colab", "local"],
+        default=os.environ.get("MAKE_AUDIO_ENGINE", "colab"),
+        help="TTS execution engine: 'colab' (uses Google Colab GPU) or 'local' (uses local machine). Default: colab.",
+    )
+    parser.add_argument(
+        "--colab-session",
+        default="make-audio",
+        help="Google Colab session name (default: make-audio)",
+    )
+    parser.add_argument(
+        "--colab-gpu",
+        default="T4",
+        help="Colab GPU accelerator variant (e.g. 'T4', 'L4', 'A100', or 'none'). Default: T4",
+    )
+    parser.add_argument(
+        "--colab-timeout",
+        type=float,
+        default=600.0,
+        help="Timeout in seconds for remote Colab synthesis (default: 600.0)",
+    )
+    parser.add_argument(
+        "--stop-session",
+        action="store_true",
+        help="Stop and release the Colab VM runtime immediately after finishing synthesis",
+    )
+    parser.add_argument(
+        "--stop-colab",
+        action="store_true",
+        help="Stop the active Colab VM session and exit immediately",
+    )
+    parser.add_argument(
+        "--fallback-local",
+        action="store_true",
+        default=False,
+        help="Automatically fall back to local hardware synthesis if Google Colab fails or is offline",
     )
     parser.add_argument(
         "--keep-display-math",
@@ -86,8 +128,53 @@ def parse_args():
     return parser.parse_args()
 
 
+def _run_local_synthesis(args, cleaned_text: str, output_audio_path: Path) -> Path:
+    """Run audio synthesis locally using PyTorch and KokoroTTS."""
+    tts = KokoroTTS(lang_code="a", device=args.device)
+
+    progress_callback = None
+    if args.verbose:
+        paragraphs = [p for p in cleaned_text.split("\n\n") if p.strip()]
+        total_paras = len(paragraphs)
+        word_count = sum(len(p.split()) for p in paragraphs)
+        print(f"Processing {total_paras} paragraphs ({word_count} words) on {tts.device.upper()}...")
+
+        def _progress(current: int, total: int, snippet: str):
+            pct = (current / total) * 100
+            clean_snippet = snippet.replace("\n", " ").strip()
+            if len(clean_snippet) > 50:
+                clean_snippet = clean_snippet[:47] + "..."
+            sys.stdout.write(f"\r[{pct:5.1f}%] [{current:02d}/{total:02d}] Generating: \"{clean_snippet}\"")
+            sys.stdout.flush()
+
+        progress_callback = _progress
+
+    final_path = tts.convert_to_audio_file(
+        text=cleaned_text,
+        output_path=output_audio_path,
+        voice=args.voice,
+        speed=args.speed,
+        progress_callback=progress_callback,
+    )
+
+    if args.verbose:
+        print()
+
+    return final_path
+
+
 def main():
     args = parse_args()
+
+    # Handle quick command: stop colab session
+    if args.stop_colab:
+        ColabTTS.stop_session(args.colab_session)
+        return
+
+    if not args.input:
+        print("Error: Path to .md or .pdf file is required.", file=sys.stderr)
+        print("Usage: make-audio <file_name> [options]", file=sys.stderr)
+        sys.exit(1)
 
     input_path = Path(args.input).resolve()
     if not input_path.exists():
@@ -95,7 +182,7 @@ def main():
         sys.exit(1)
 
     # 1. Show the file being converted
-    print(f"Converting: {input_path.name}")
+    print(f"Converting: {input_path.name} (engine: {args.engine})")
 
     if input_path.suffix.lower() == ".pdf":
         raw_text = extract_text_from_pdf(
@@ -135,38 +222,35 @@ def main():
         suffix_tag = f"_p{args.pages}" if (input_path.suffix.lower() == ".pdf" and args.pages) else ""
         output_audio_path = Path.cwd() / f"{input_path.stem}{suffix_tag}.wav"
 
-    # Initialize Kokoro TTS Engine quietly
-    tts = KokoroTTS(lang_code="a", device=args.device)
+    # 2. Synthesize audio via chosen engine
+    if args.engine == "colab":
+        try:
+            colab = ColabTTS(
+                session_name=args.colab_session,
+                gpu=args.colab_gpu,
+                timeout=args.colab_timeout,
+                verbose=args.verbose,
+            )
+            final_path = colab.convert_to_audio_file(
+                text=cleaned_text,
+                output_path=output_audio_path,
+                voice=args.voice,
+                speed=args.speed,
+                stop_session_after=args.stop_session,
+            )
+        except Exception as e:
+            if args.fallback_local:
+                print(f"\n[make-audio] Colab synthesis encountered an error: {e}", file=sys.stderr)
+                print("[make-audio] Falling back to local Kokoro-TTS engine...", file=sys.stderr)
+                final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
+            else:
+                print(f"\n[make-audio] Colab synthesis error: {e}", file=sys.stderr)
+                print("[make-audio] Tip: use '--fallback-local' to automatically use local hardware on failure, or '--engine local'.", file=sys.stderr)
+                sys.exit(1)
+    else:
+        final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
 
-    progress_callback = None
-    if args.verbose:
-        paragraphs = [p for p in cleaned_text.split("\n\n") if p.strip()]
-        total_paras = len(paragraphs)
-        word_count = sum(len(p.split()) for p in paragraphs)
-        print(f"Processing {total_paras} paragraphs ({word_count} words) on {tts.device.upper()}...")
-
-        def _progress(current: int, total: int, snippet: str):
-            pct = (current / total) * 100
-            clean_snippet = snippet.replace("\n", " ").strip()
-            if len(clean_snippet) > 50:
-                clean_snippet = clean_snippet[:47] + "..."
-            sys.stdout.write(f"\r[{pct:5.1f}%] [{current:02d}/{total:02d}] Generating: \"{clean_snippet}\"")
-            sys.stdout.flush()
-
-        progress_callback = _progress
-
-    final_path = tts.convert_to_audio_file(
-        text=cleaned_text,
-        output_path=output_audio_path,
-        voice=args.voice,
-        speed=args.speed,
-        progress_callback=progress_callback,
-    )
-
-    if args.verbose:
-        print()
-
-    # 2. Show where the audio file is created
+    # 3. Show where the audio file is created
     print(f"Audio file saved to: {final_path}")
 
 
