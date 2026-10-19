@@ -1,0 +1,25 @@
+[project]
+name = "pdf"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { email = "Omega496" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "kokoro>=0.9.4",
+    "pypdf>=6.20.1",
+    "soundfile>=0.14.0",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+
+[project.scripts]
+pdf = "pdf.md_to_audio:main"
+md-to-audio = "pdf.md_to_audio:main"
+make_audio = "pdf.md_to_audio:main"
+make-audio = "pdf.md_to_audio:main"
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13.0"]
+build-backend = "uv_build"
