@@ -102,7 +102,7 @@ When audio plays in the terminal, you have full interactive keyboard control via
 - `[{ / }]` : Halve / Double speed
 - `[Backspace]` : Reset speed to 1.0x
 - `[9 / 0]` : Decrease / Increase volume
-- `[q / Esc]` : Stop & Quit immediately (cleans up any temp files)
+- `[q / Esc]` : Stop & Quit (Session stays open after playback ends so you can seek back and replay; cleans up temp files)
 
 ---
 

@@ -47,13 +47,14 @@ def play_audio_in_terminal(audio_path: Path, title: Optional[str] = None) -> boo
         print("  [{ / }]     Halve / Double speed")
         print("  [Backspace] Reset speed to 1.0x")
         print("  [9 / 0]     Decrease / Increase volume")
-        print("  [q / Esc]   Stop & Quit")
+        print("  [q / Esc]   Stop & Quit (Session stays open after audio finishes)")
         print("=" * 60 + "\n")
 
         cmd = [
             mpv_bin,
             "--no-video",
             "--term-osd-bar",
+            "--keep-open=yes",
             str(audio_path),
         ]
         try:
@@ -69,13 +70,12 @@ def play_audio_in_terminal(audio_path: Path, title: Optional[str] = None) -> boo
         print("⌨️  Playback Controls (ffplay):")
         print("  [Space]     Pause / Resume")
         print("  [← / →]     Seek 10s")
-        print("  [q / Esc]   Stop & Quit")
+        print("  [q / Esc]   Stop & Quit (Session stays open after audio finishes)")
         print("=" * 60 + "\n")
 
         cmd = [
             ffplay_bin,
             "-nodisp",
-            "-autoexit",
             str(audio_path),
         ]
         try:
