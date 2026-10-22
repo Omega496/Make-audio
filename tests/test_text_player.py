@@ -2,7 +2,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 # Add src to path
 src_dir = Path(__file__).resolve().parent.parent / "src"
@@ -174,8 +174,122 @@ def test_file_with_play_explicit_output_preserved():
     print("✓ test_file_with_play_explicit_output_preserved passed")
 
 
+def test_temp_scratchpad_success():
+    """Verify that 'make-audio --temp' opens editor, converts, plays, and deletes temp.md and temp.wav."""
+    temp_md_path = Path.cwd() / "temp.md"
+    played_audio = None
+    scratchpad_existed_during_playback = False
+
+    def mock_nano_edit(cmd, check=False):
+        # cmd[1] is the filepath
+        Path(cmd[1]).write_text("# Scratchpad Notes\nThis is multi-line notes.\nWith formulas like $E = mc^2$.\n", encoding="utf-8")
+        return MagicMock(returncode=0)
+
+    def mock_play(audio_path, title=None):
+        nonlocal played_audio, scratchpad_existed_during_playback
+        played_audio = Path(audio_path)
+        scratchpad_existed_during_playback = temp_md_path.exists()
+        assert title == "temp.md"
+        return True
+
+    def mock_synthesize(args, cleaned_text, output_audio_path):
+        Path(output_audio_path).write_bytes(b"RIFFdummywavdata")
+        return Path(output_audio_path)
+
+    with patch("sys.argv", ["make-audio", "--temp"]), \
+         patch("subprocess.run", side_effect=mock_nano_edit), \
+         patch("pdf.md_to_audio._run_local_synthesis", side_effect=mock_synthesize), \
+         patch("pdf.md_to_audio.play_audio_in_terminal", side_effect=mock_play):
+        main()
+
+    assert played_audio is not None, "Playback was not called!"
+    assert scratchpad_existed_during_playback, "temp.md should exist during playback!"
+    assert not temp_md_path.exists(), "temp.md must be deleted after command completes!"
+    assert not played_audio.exists(), f"Temporary audio {played_audio} must be deleted after playback!"
+    print("✓ test_temp_scratchpad_success passed")
+
+
+def test_temp_scratchpad_interrupt():
+    """Verify that both temp.md and temp.wav are deleted when interrupted via Ctrl+C."""
+    temp_md_path = Path.cwd() / "temp.md"
+    played_audio = None
+
+    def mock_nano_edit(cmd, check=False):
+        Path(cmd[1]).write_text("Some text before interrupt.", encoding="utf-8")
+        return MagicMock(returncode=0)
+
+    def mock_play_interrupt(audio_path, title=None):
+        nonlocal played_audio
+        played_audio = Path(audio_path)
+        raise KeyboardInterrupt()
+
+    def mock_synthesize(args, cleaned_text, output_audio_path):
+        Path(output_audio_path).write_bytes(b"RIFFdummywavdata")
+        return Path(output_audio_path)
+
+    try:
+        with patch("sys.argv", ["make-audio", "--temp"]), \
+             patch("subprocess.run", side_effect=mock_nano_edit), \
+             patch("pdf.md_to_audio._run_local_synthesis", side_effect=mock_synthesize), \
+             patch("pdf.md_to_audio.play_audio_in_terminal", side_effect=mock_play_interrupt):
+            main()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+
+    assert not temp_md_path.exists(), "temp.md must be deleted on interrupt!"
+    if played_audio:
+        assert not played_audio.exists(), "Temporary audio file must be deleted on interrupt!"
+    print("✓ test_temp_scratchpad_interrupt passed")
+
+
+def test_temp_scratchpad_empty():
+    """Verify that exiting editor without typing text cleans up temp.md and cancels cleanly."""
+    temp_md_path = Path.cwd() / "temp.md"
+
+    def mock_nano_exit_empty(cmd, check=False):
+        # User exits nano without typing anything
+        return MagicMock(returncode=0)
+
+    with patch("sys.argv", ["make-audio", "--temp"]), \
+         patch("subprocess.run", side_effect=mock_nano_exit_empty):
+        main()
+
+    assert not temp_md_path.exists(), "temp.md must be deleted when empty scratchpad is cancelled!"
+    print("✓ test_temp_scratchpad_empty passed")
+
+
+def test_t_flag_routes_to_scratchpad():
+    """Verify that 'make-audio -t temp.txt' automatically routes to scratchpad editor mode."""
+    temp_txt_path = Path.cwd() / "temp.txt"
+    nano_called = False
+
+    def mock_nano_edit(cmd, check=False):
+        nonlocal nano_called
+        nano_called = True
+        assert Path(cmd[1]).name == "temp.txt"
+        Path(cmd[1]).write_text("Hello from temp.txt", encoding="utf-8")
+        return MagicMock(returncode=0)
+
+    def mock_play(audio_path, title=None):
+        return True
+
+    def mock_synthesize(args, cleaned_text, output_audio_path):
+        Path(output_audio_path).write_bytes(b"RIFFdummywavdata")
+        return Path(output_audio_path)
+
+    with patch("sys.argv", ["make-audio", "-t", "temp.txt"]), \
+         patch("subprocess.run", side_effect=mock_nano_edit), \
+         patch("pdf.md_to_audio._run_local_synthesis", side_effect=mock_synthesize), \
+         patch("pdf.md_to_audio.play_audio_in_terminal", side_effect=mock_play):
+        main()
+
+    assert nano_called, "Editor was not called when passing -t temp.txt!"
+    assert not temp_txt_path.exists(), "temp.txt must be deleted after playback!"
+    print("✓ test_t_flag_routes_to_scratchpad passed")
+
+
 def test_mutually_exclusive_args():
-    """Verify that specifying both file input and -t errors out."""
+    """Verify that specifying multiple input modes errors out."""
     with patch("sys.argv", ["make-audio", "file.md", "-t", "hello"]):
         try:
             main()
@@ -192,5 +306,9 @@ if __name__ == "__main__":
     test_file_with_play_temporary_cleanup()
     test_file_with_play_cleanup_on_interrupt()
     test_file_with_play_explicit_output_preserved()
+    test_temp_scratchpad_success()
+    test_temp_scratchpad_interrupt()
+    test_temp_scratchpad_empty()
+    test_t_flag_routes_to_scratchpad()
     test_mutually_exclusive_args()
-    print("\nAll playback & cleanup tests passed successfully!")
+    print("\nAll playback, scratchpad & cleanup tests passed successfully!")

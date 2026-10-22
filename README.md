@@ -13,6 +13,11 @@ Supports **Local Hardware (Default)** as well as **Google Colab Cloud GPU accele
 - **One-Flag Google Colab GPU Acceleration (`--colab`):**
   - Run with `--colab` to execute heavy neural TTS on Google Colab's cloud GPUs (NVIDIA Tesla T4).
   - **Zero-touch cleanup:** Google Colab VM is automatically shut down as soon as synthesis completes so you never burn compute units.
+- **Interactive Scratchpad in Nano (`--temp`):**
+  - Run `make-audio --temp` (or `make-audio --temp temp.txt` / `make-audio -t temp.md`) to open a scratchpad directly in `nano`.
+  - Paste any amount of multi-line text, formulas, or markdown notes without terminal quoting or escaping issues.
+  - Save (`Ctrl+O`, `Enter`) and exit (`Ctrl+X`). It immediately synthesizes and begins terminal playback in `mpv`.
+  - **Zero file residue:** As soon as playback completes, you quit (`q` / `Esc`), or you interrupt (`Ctrl+C`), **both the temporary text file and audio file are automatically deleted**.
 - **Direct Text-to-Speech & Interactive Terminal Playback (`-t` / `--text`):**
   - Run `make-audio -t "Any text you want to hear"` to synthesize and play directly in the terminal without creating persistent files.
   - Interactive controls directly from keyboard: pause/resume (`Space`), speed control (`[` and `]`), seek (`←`/`→` and `↓`/`↑`), volume (`9`/`0`), and stop (`q` or `Esc`).
@@ -43,9 +48,35 @@ Supports **Local Hardware (Default)** as well as **Google Colab Cloud GPU accele
 
 ## 🛠️ Usage
 
+### Interactive Nano Scratchpad (`--temp`)
+
+For multi-line text, articles, or notes containing special characters, math formulas, or quotes that are hard to pass directly on the command line, use `--temp` to open a scratchpad in `nano`:
+
+```bash
+# 1. Open scratchpad in nano (default: temp.md), paste your text, save & exit:
+make-audio --temp
+
+# 2. Or specify a custom temporary scratchpad name:
+make-audio --temp temp.txt
+# (or simply: make-audio -t temp.md)
+
+# 3. Use with custom voice, speed, or Colab GPU:
+make-audio --temp -v af_sarah -s 1.2
+make-audio --temp --colab
+```
+
+**Workflow:**
+1. Nano opens with `temp.md` (or your chosen name).
+2. Paste any amount of multi-line text (`Ctrl+Shift+V` or mouse paste).
+3. Save with `Ctrl+O` and `Enter`, then exit with `Ctrl+X`.
+4. `make-audio` converts the text into `temp.wav` and immediately plays it in `mpv`.
+5. When you finish, press `q` / `Esc`, or press `Ctrl+C`: **both `temp.md` and `temp.wav` are automatically deleted**. Zero files left behind!
+
+---
+
 ### Direct Text-to-Speech & Terminal Playback (`-t`)
 
-Synthesize any text and play it immediately in your terminal with real-time controls (no audio files left on disk):
+Synthesize a single text phrase and play it immediately in your terminal with real-time controls (no audio files left on disk):
 
 ```bash
 # Speak text and play in terminal with interactive controls:
@@ -93,7 +124,7 @@ make_audio . --colab
 # 1. Convert a Markdown file locally:
 make_audio notes.md
 
-# 2. Convert and immediately play in terminal:
+# 2. Convert and immediately play in terminal (cleans up temp audio on exit):
 make_audio notes.md --play
 
 # 3. Convert a plain text file locally:
@@ -111,18 +142,20 @@ make_audio notes.md --colab
 ### CLI Options
 
 ```text
-usage: make-audio [-h] [-t TEXT] [--play] [--no-play] [-o OUTPUT] [-v VOICE]
-                  [-s SPEED] [-p PAGES] [-d {cuda,cpu}] [--colab]
-                  [--engine {local,colab}] [--colab-session COLAB_SESSION]
-                  [--colab-gpu COLAB_GPU] [--colab-timeout COLAB_TIMEOUT]
-                  [--keep-colab] [--stop-colab] [--fallback-local]
-                  [--keep-display-math] [--keep-references]
-                  [--save-cleaned-text] [--preview] [--verbose]
+usage: make-audio [-h] [-t TEXT] [--temp [TEMP]] [--play] [--no-play]
+                  [-o OUTPUT] [-v VOICE] [-s SPEED] [-p PAGES] [-d {cuda,cpu}]
+                  [--colab] [--engine {local,colab}]
+                  [--colab-session COLAB_SESSION] [--colab-gpu COLAB_GPU]
+                  [--colab-timeout COLAB_TIMEOUT] [--keep-colab]
+                  [--stop-colab] [--fallback-local] [--keep-display-math]
+                  [--keep-references] [--save-cleaned-text] [--preview]
+                  [--verbose]
                   [input ...]
 
 options:
   -h, --help            Show help message and exit
   -t, --text TEXT       Input text string directly to synthesize and play in terminal
+  --temp [TEMP]         Open scratchpad in nano (default: temp.md), convert, play, and auto-delete all files on exit
   --play                Play audio interactively in the terminal (cleans up temp file if -o is omitted)
   --no-play             Do not automatically play audio when using -t/--text
   -o, --output OUTPUT   Output audio filepath (.wav or .mp3) for a single file, or destination folder for batch conversion

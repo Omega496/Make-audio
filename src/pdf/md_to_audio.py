@@ -10,6 +10,8 @@ high-quality audio using local Kokoro-TTS (default) or Google Colab GPU (--colab
 import argparse
 import atexit
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -28,7 +30,7 @@ IGNORE_FILENAMES = {"requirements.txt", "constraints.txt"}
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Convert Markdown (.md), Text (.txt), or PDF (.pdf) files, or direct text strings into natural plain-English audio using local Kokoro-TTS or Google Colab."
+        description="Convert Markdown (.md), Text (.txt), or PDF (.pdf) files, direct text strings, or interactive scratchpads into natural plain-English audio using local Kokoro-TTS or Google Colab."
     )
     parser.add_argument(
         "input",
@@ -41,6 +43,13 @@ def parse_args():
         "--text",
         default=None,
         help="Input text string directly to synthesize and play in the terminal.",
+    )
+    parser.add_argument(
+        "--temp",
+        nargs="?",
+        const="temp.md",
+        default=None,
+        help="Open a scratchpad document in nano (default: temp.md), convert to audio, play in terminal, and delete all temporary files upon exit.",
     )
     parser.add_argument(
         "--play",
@@ -238,15 +247,22 @@ def main():
         ColabTTS.stop_session(args.colab_session, verbose=args.verbose)
         return
 
+    # Check if -t was passed with a filename intended for temporary scratchpad
+    if args.text and (args.text.endswith((".txt", ".md")) and "\n" not in args.text and " " not in args.text and not Path(args.text).exists()):
+        args.temp = args.text
+        args.text = None
+
     # Check input arguments
-    if not args.input and not args.text:
-        print("Error: Input file(s), directory, or -t/--text is required (e.g. 'make-audio .' or 'make-audio -t \"hello\"')", file=sys.stderr)
+    active_modes = [bool(args.input), bool(args.text), bool(args.temp)]
+    if sum(active_modes) == 0:
+        print("Error: Input file(s), directory, -t/--text, or --temp is required.", file=sys.stderr)
         print("Usage: make-audio [files_or_dirs...] [options]", file=sys.stderr)
         print("       make-audio -t \"some text to speak\" [options]", file=sys.stderr)
+        print("       make-audio --temp [temp.md] [options]", file=sys.stderr)
         sys.exit(1)
 
-    if args.input and args.text:
-        print("Error: Cannot specify both file inputs and -t/--text at the same time.", file=sys.stderr)
+    if sum(active_modes) > 1:
+        print("Error: Cannot specify multiple input modes simultaneously (choose files, -t/--text, or --temp).", file=sys.stderr)
         sys.exit(1)
 
     colab_instance = None
@@ -259,6 +275,117 @@ def main():
         )
 
     try:
+        # Handle scratchpad editor mode (--temp)
+        if args.temp:
+            temp_filename = args.temp
+            temp_doc_path = (Path.cwd() / temp_filename).resolve()
+
+            editor = os.environ.get("EDITOR") or shutil.which("nano") or shutil.which("vim") or "nano"
+            if not shutil.which(editor):
+                print(f"Error: Editor '{editor}' not found. Please install nano ('sudo apt install nano').", file=sys.stderr)
+                sys.exit(1)
+
+            # Ensure file exists before opening nano
+            temp_doc_path.touch(exist_ok=True)
+            atexit.register(lambda p=temp_doc_path: p.unlink(missing_ok=True))
+
+            print(f"Opening scratchpad '{temp_doc_path.name}' in {Path(editor).name}...")
+            print("Tip: Paste your text, save with Ctrl+O and Enter, then exit with Ctrl+X.\n")
+            time.sleep(1.0)
+
+            temp_audio_file = None
+            try:
+                # Launch nano
+                subprocess.run([editor, str(temp_doc_path)], check=False)
+
+                if not temp_doc_path.exists():
+                    print("Scratchpad was cancelled or not saved.")
+                    return
+
+                try:
+                    raw_text = temp_doc_path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    raw_text = temp_doc_path.read_text(encoding="latin-1")
+
+                cleaned_text = clean_markdown_for_tts(
+                    raw_text,
+                    remove_display_equations=not args.keep_display_math,
+                )
+
+                if not cleaned_text.strip():
+                    print(f"Scratchpad '{temp_doc_path.name}' is empty. Playback cancelled.")
+                    return
+
+                if args.save_cleaned_text:
+                    text_output_path = Path.cwd() / f"{temp_doc_path.stem}_cleaned.txt"
+                    text_output_path.write_text(cleaned_text, encoding="utf-8")
+                    if args.verbose:
+                        print(f"Cleaned plain-English text saved to: {text_output_path}")
+
+                if args.preview:
+                    print("\n" + "=" * 50)
+                    print(f"CLEANED TEXT PREVIEW: {temp_doc_path.name}")
+                    print("=" * 50)
+                    print(cleaned_text)
+                    print("=" * 50)
+                    return
+
+                # Create temporary audio file
+                if args.output:
+                    output_audio_path = Path(args.output).resolve()
+                    is_audio_temp = False
+                else:
+                    tmp = tempfile.NamedTemporaryFile(suffix=f"_{temp_doc_path.stem}.wav", delete=False)
+                    output_audio_path = Path(tmp.name)
+                    tmp.close()
+                    temp_audio_file = output_audio_path
+                    is_audio_temp = True
+                    atexit.register(lambda p=output_audio_path: p.unlink(missing_ok=True))
+
+                engine_str = f" (engine: {args.engine})" if args.verbose else ""
+                print(f"Synthesizing audio{engine_str}...")
+
+                if args.engine == "colab":
+                    try:
+                        final_path = colab_instance.convert_to_audio_file(
+                            text=cleaned_text,
+                            output_path=output_audio_path,
+                            voice=args.voice,
+                            speed=args.speed,
+                            stop_session_after=False,
+                        )
+                    except Exception as e:
+                        if args.fallback_local:
+                            print(f"\n[make-audio] Colab error: {e}", file=sys.stderr)
+                            print("[make-audio] Falling back to local Kokoro-TTS engine...", file=sys.stderr)
+                            final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
+                        else:
+                            print(f"\n[make-audio] Colab error: {e}", file=sys.stderr)
+                            print("[make-audio] Tip: use '--fallback-local' to fall back on failure, or omit '--colab'.", file=sys.stderr)
+                            raise
+                else:
+                    final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
+
+                if not is_audio_temp:
+                    print(f"Audio file saved to: {final_path}")
+
+                if not args.no_play:
+                    play_audio_in_terminal(final_path, title=temp_doc_path.name)
+            finally:
+                # Always delete temp document file
+                if temp_doc_path and temp_doc_path.exists():
+                    try:
+                        temp_doc_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                # Always delete temp audio file (unless explicit -o was used)
+                if temp_audio_file and temp_audio_file.exists():
+                    try:
+                        temp_audio_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            return
+
         # Handle direct text input (-t / --text)
         if args.text:
             cleaned_text = clean_markdown_for_tts(
