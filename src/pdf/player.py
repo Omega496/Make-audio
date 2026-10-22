@@ -31,14 +31,8 @@ def play_audio_in_terminal(audio_path: Path, title: Optional[str] = None) -> boo
     ffplay_bin = shutil.which("ffplay")
     aplay_bin = shutil.which("aplay")
 
-    print("\n" + "=" * 60)
-    if title:
-        print(f"🔊 Playing: \"{title}\"")
-    else:
-        print(f"🔊 Playing: {audio_path.name}")
-    print("=" * 60)
-
     if mpv_bin:
+        print("\n" + "=" * 60)
         print("⌨️  Playback Controls:")
         print("  [Space]     Pause / Resume")
         print("  [← / →]     Seek backward / forward 5s")
@@ -67,6 +61,7 @@ def play_audio_in_terminal(audio_path: Path, title: Optional[str] = None) -> boo
             raise
 
     elif ffplay_bin:
+        print("\n" + "=" * 60)
         print("⌨️  Playback Controls (ffplay):")
         print("  [Space]     Pause / Resume")
         print("  [← / →]     Seek 10s")
