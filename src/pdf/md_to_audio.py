@@ -46,7 +46,7 @@ def parse_args():
         "--play",
         action="store_true",
         default=False,
-        help="Play audio interactively in the terminal after generation (default when using -t/--text).",
+        help="Play audio interactively in the terminal. When used without -o/--output, plays temporarily and deletes the audio file when closed or interrupted.",
     )
     parser.add_argument(
         "--no-play",
@@ -401,6 +401,9 @@ def main():
                 continue
 
             # Determine audio output path
+            temp_audio_file = None
+            is_temporary = False
+
             if args.output:
                 out_path = Path(args.output).resolve()
                 if is_batch:
@@ -411,37 +414,56 @@ def main():
                         output_audio_path = out_path / f"{file_path.stem}.wav"
                 else:
                     output_audio_path = out_path
+            elif args.play:
+                # With --play and no explicit -o, synthesize to a temporary file and delete after playback or interruption
+                tmp = tempfile.NamedTemporaryFile(suffix=f"_{file_path.stem}.wav", delete=False)
+                output_audio_path = Path(tmp.name)
+                tmp.close()
+                temp_audio_file = output_audio_path
+                is_temporary = True
+                atexit.register(lambda p=output_audio_path: p.unlink(missing_ok=True))
             else:
                 suffix_tag = f"_p{args.pages}" if (file_path.suffix.lower() == ".pdf" and args.pages) else ""
                 output_audio_path = Path.cwd() / f"{file_path.stem}{suffix_tag}.wav"
 
-            # Synthesize audio via chosen engine
-            if args.engine == "colab":
-                try:
-                    final_path = colab_instance.convert_to_audio_file(
-                        text=cleaned_text,
-                        output_path=output_audio_path,
-                        voice=args.voice,
-                        speed=args.speed,
-                        stop_session_after=False,
-                    )
-                except Exception as e:
-                    if args.fallback_local:
-                        print(f"\n[make-audio] Colab error on {file_path.name}: {e}", file=sys.stderr)
-                        print("[make-audio] Falling back to local Kokoro-TTS engine...", file=sys.stderr)
-                        final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
-                    else:
-                        print(f"\n[make-audio] Colab error on {file_path.name}: {e}", file=sys.stderr)
-                        print("[make-audio] Tip: use '--fallback-local' to fall back on failure, or omit '--colab'.", file=sys.stderr)
-                        raise
-            else:
-                final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
+            try:
+                # Synthesize audio via chosen engine
+                if args.engine == "colab":
+                    try:
+                        final_path = colab_instance.convert_to_audio_file(
+                            text=cleaned_text,
+                            output_path=output_audio_path,
+                            voice=args.voice,
+                            speed=args.speed,
+                            stop_session_after=False,
+                        )
+                    except Exception as e:
+                        if args.fallback_local:
+                            print(f"\n[make-audio] Colab error on {file_path.name}: {e}", file=sys.stderr)
+                            print("[make-audio] Falling back to local Kokoro-TTS engine...", file=sys.stderr)
+                            final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
+                        else:
+                            print(f"\n[make-audio] Colab error on {file_path.name}: {e}", file=sys.stderr)
+                            print("[make-audio] Tip: use '--fallback-local' to fall back on failure, or omit '--colab'.", file=sys.stderr)
+                            raise
+                else:
+                    final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
 
-            print(f"Audio file saved to: {final_path}")
+                if not is_temporary:
+                    print(f"Audio file saved to: {final_path}")
 
-            if args.play:
-                play_audio_in_terminal(final_path, title=file_path.name)
+                if args.play:
+                    play_audio_in_terminal(final_path, title=file_path.name)
+            finally:
+                if is_temporary and temp_audio_file and temp_audio_file.exists():
+                    try:
+                        temp_audio_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
+    except KeyboardInterrupt:
+        print("\n[make-audio] Interrupted by user.", file=sys.stderr)
+        sys.exit(130)
     finally:
         # Automatically stop Colab session when done unless user specifically asked to keep it
         if args.engine == "colab" and not args.keep_colab:

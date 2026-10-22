@@ -58,7 +58,7 @@ def test_text_temporary_cleanup_on_interrupt():
              patch("pdf.md_to_audio._run_local_synthesis", side_effect=mock_synthesize), \
              patch("pdf.md_to_audio.play_audio_in_terminal", side_effect=mock_play_interrupt):
             main()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         pass
 
     assert played_file is not None
@@ -84,16 +84,18 @@ def test_text_explicit_output_preserved():
     print("✓ test_text_explicit_output_preserved passed")
 
 
-def test_file_with_play():
-    """Verify that file conversion with --play invokes play_audio_in_terminal."""
+def test_file_with_play_temporary_cleanup():
+    """Verify that 'make-audio notes.md --play' uses a temporary file and deletes it after playback."""
     with tempfile.TemporaryDirectory() as tmpdir:
         test_file = Path(tmpdir) / "notes.md"
-        test_file.write_text("This is a markdown file with notes.", encoding="utf-8")
-        played = False
+        test_file.write_text("# Chapter 1\nThis is notes content.", encoding="utf-8")
+        played_file = None
+        file_existed_during_playback = False
 
         def mock_play(audio_path, title=None):
-            nonlocal played
-            played = True
+            nonlocal played_file, file_existed_during_playback
+            played_file = Path(audio_path)
+            file_existed_during_playback = played_file.exists()
             assert title == "notes.md"
             return True
 
@@ -101,14 +103,75 @@ def test_file_with_play():
             Path(output_audio_path).write_bytes(b"RIFFdummywavdata")
             return Path(output_audio_path)
 
-        out_wav = Path(tmpdir) / "notes.wav"
+        with patch("sys.argv", ["make-audio", str(test_file), "--play"]), \
+             patch("pdf.md_to_audio._run_local_synthesis", side_effect=mock_synthesize), \
+             patch("pdf.md_to_audio.play_audio_in_terminal", side_effect=mock_play):
+            main()
+
+        assert played_file is not None, "play_audio_in_terminal was not called!"
+        assert file_existed_during_playback, "Temporary file did not exist during playback!"
+        assert not played_file.exists(), f"Temporary file {played_file} was not deleted after playback!"
+        # Verify no notes.wav was created in working directory
+        assert not (Path.cwd() / "notes.wav").exists(), "notes.wav should not be created in current directory when --play is used without -o!"
+    print("✓ test_file_with_play_temporary_cleanup passed")
+
+
+def test_file_with_play_cleanup_on_interrupt():
+    """Verify that 'make-audio notes.md --play' deletes the temporary file even on KeyboardInterrupt."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_file = Path(tmpdir) / "notes.md"
+        test_file.write_text("# Chapter 1\nThis is notes content.", encoding="utf-8")
+        played_file = None
+
+        def mock_play_interrupt(audio_path, title=None):
+            nonlocal played_file
+            played_file = Path(audio_path)
+            raise KeyboardInterrupt()
+
+        def mock_synthesize(args, cleaned_text, output_audio_path):
+            Path(output_audio_path).write_bytes(b"RIFFdummywavdata")
+            return Path(output_audio_path)
+
+        try:
+            with patch("sys.argv", ["make-audio", str(test_file), "--play"]), \
+                 patch("pdf.md_to_audio._run_local_synthesis", side_effect=mock_synthesize), \
+                 patch("pdf.md_to_audio.play_audio_in_terminal", side_effect=mock_play_interrupt):
+                main()
+        except (KeyboardInterrupt, SystemExit):
+            pass
+
+        assert played_file is not None
+        assert not played_file.exists(), f"Temporary file {played_file} was not deleted on KeyboardInterrupt!"
+    print("✓ test_file_with_play_cleanup_on_interrupt passed")
+
+
+def test_file_with_play_explicit_output_preserved():
+    """Verify that 'make-audio notes.md -o output.wav --play' preserves the output file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_file = Path(tmpdir) / "notes.md"
+        test_file.write_text("# Notes\nHello world.", encoding="utf-8")
+        out_wav = Path(tmpdir) / "saved_notes.wav"
+        played = False
+
+        def mock_play(audio_path, title=None):
+            nonlocal played
+            played = True
+            assert Path(audio_path) == out_wav
+            return True
+
+        def mock_synthesize(args, cleaned_text, output_audio_path):
+            Path(output_audio_path).write_bytes(b"RIFFdummywavdata")
+            return Path(output_audio_path)
+
         with patch("sys.argv", ["make-audio", str(test_file), "-o", str(out_wav), "--play"]), \
              patch("pdf.md_to_audio._run_local_synthesis", side_effect=mock_synthesize), \
              patch("pdf.md_to_audio.play_audio_in_terminal", side_effect=mock_play):
             main()
 
-        assert played, "play_audio_in_terminal was not called for file with --play!"
-    print("✓ test_file_with_play passed")
+        assert played
+        assert out_wav.exists(), "Explicit output file should not be deleted!"
+        assert out_wav.stat().st_size > 0
+    print("✓ test_file_with_play_explicit_output_preserved passed")
 
 
 def test_mutually_exclusive_args():
@@ -126,6 +189,8 @@ if __name__ == "__main__":
     test_text_temporary_cleanup()
     test_text_temporary_cleanup_on_interrupt()
     test_text_explicit_output_preserved()
-    test_file_with_play()
+    test_file_with_play_temporary_cleanup()
+    test_file_with_play_cleanup_on_interrupt()
+    test_file_with_play_explicit_output_preserved()
     test_mutually_exclusive_args()
-    print("\nAll text playback tests passed successfully!")
+    print("\nAll playback & cleanup tests passed successfully!")

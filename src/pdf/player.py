@@ -57,11 +57,13 @@ def play_audio_in_terminal(audio_path: Path, title: Optional[str] = None) -> boo
             str(audio_path),
         ]
         try:
-            subprocess.run(cmd, check=False)
+            res = subprocess.run(cmd, check=False)
+            if res.returncode in (-2, 130):
+                raise KeyboardInterrupt()
             return True
         except KeyboardInterrupt:
             print("\nPlayback stopped.")
-            return True
+            raise
 
     elif ffplay_bin:
         print("⌨️  Playback Controls (ffplay):")
@@ -77,20 +79,24 @@ def play_audio_in_terminal(audio_path: Path, title: Optional[str] = None) -> boo
             str(audio_path),
         ]
         try:
-            subprocess.run(cmd, check=False)
+            res = subprocess.run(cmd, check=False)
+            if res.returncode in (-2, 130):
+                raise KeyboardInterrupt()
             return True
         except KeyboardInterrupt:
             print("\nPlayback stopped.")
-            return True
+            raise
 
     elif aplay_bin:
         print("Playing audio via aplay (Ctrl+C to stop)...")
         try:
-            subprocess.run([aplay_bin, str(audio_path)], check=False)
+            res = subprocess.run([aplay_bin, str(audio_path)], check=False)
+            if res.returncode in (-2, 130):
+                raise KeyboardInterrupt()
             return True
         except KeyboardInterrupt:
             print("\nPlayback stopped.")
-            return True
+            raise
     else:
         print(
             "Error: No audio player found on system (mpv, ffplay, or aplay).\n"

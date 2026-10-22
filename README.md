@@ -18,7 +18,8 @@ Supports **Local Hardware (Default)** as well as **Google Colab Cloud GPU accele
   - Interactive controls directly from keyboard: pause/resume (`Space`), speed control (`[` and `]`), seek (`←`/`→` and `↓`/`↑`), volume (`9`/`0`), and stop (`q` or `Esc`).
   - **Zero file residue:** Temporary audio files are automatically purged from disk as soon as playback finishes or is interrupted. Pass `-o output.wav` if you wish to persist the audio.
 - **Immediate Playback for Files (`--play`):**
-  - Add `--play` when converting documents (e.g. `make-audio notes.md --play`) to immediately launch interactive terminal playback.
+  - Run `make-audio notes.md --play` to listen to documents directly in your terminal.
+  - **Zero file residue:** Unless `-o` is explicitly provided, `--play` uses a temporary file and automatically purges it when you quit (`q` / `Esc`), finish playback, or interrupt (`Ctrl+C`). To save the file permanently while listening, pass `-o filename.wav`.
 - **Supports Multiple Formats:**
   - Markdown (`.md`), plain text (`.txt`), and PDF (`.pdf`) files.
   - Page selection (`--pages 1-3`) for PDFs.
@@ -122,7 +123,7 @@ usage: make-audio [-h] [-t TEXT] [--play] [--no-play] [-o OUTPUT] [-v VOICE]
 options:
   -h, --help            Show help message and exit
   -t, --text TEXT       Input text string directly to synthesize and play in terminal
-  --play                Play audio interactively in the terminal after generation
+  --play                Play audio interactively in the terminal (cleans up temp file if -o is omitted)
   --no-play             Do not automatically play audio when using -t/--text
   -o, --output OUTPUT   Output audio filepath (.wav or .mp3) for a single file, or destination folder for batch conversion
   -v, --voice VOICE     Kokoro voice pack (default: af_heart)
