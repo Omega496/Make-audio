@@ -8,8 +8,10 @@ high-quality audio using local Kokoro-TTS (default) or Google Colab GPU (--colab
 """
 
 import argparse
+import atexit
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import List
@@ -17,6 +19,7 @@ from typing import List
 from pdf.cleaner import clean_markdown_for_tts
 from pdf.colab_tts import ColabTTS, ColabTTSError
 from pdf.pdf_extractor import extract_text_from_pdf
+from pdf.player import play_audio_in_terminal
 from pdf.tts import KokoroTTS
 
 SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt", ".pdf"}
@@ -25,13 +28,31 @@ IGNORE_FILENAMES = {"requirements.txt", "constraints.txt"}
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Convert Markdown (.md), Text (.txt), or PDF (.pdf) files into natural plain-English audio using local Kokoro-TTS or Google Colab."
+        description="Convert Markdown (.md), Text (.txt), or PDF (.pdf) files, or direct text strings into natural plain-English audio using local Kokoro-TTS or Google Colab."
     )
     parser.add_argument(
         "input",
         nargs="*",
         default=[],
         help="Path to .md, .txt, .pdf file(s) or directory (e.g. '.') to convert",
+    )
+    parser.add_argument(
+        "-t",
+        "--text",
+        default=None,
+        help="Input text string directly to synthesize and play in the terminal.",
+    )
+    parser.add_argument(
+        "--play",
+        action="store_true",
+        default=False,
+        help="Play audio interactively in the terminal after generation (default when using -t/--text).",
+    )
+    parser.add_argument(
+        "--no-play",
+        action="store_true",
+        default=False,
+        help="Do not automatically play audio when using -t/--text.",
     )
     parser.add_argument(
         "-o",
@@ -217,22 +238,16 @@ def main():
         ColabTTS.stop_session(args.colab_session, verbose=args.verbose)
         return
 
-    if not args.input:
-        print("Error: Input file or directory is required (e.g. 'make-audio .' or 'make-audio notes.md')", file=sys.stderr)
+    # Check input arguments
+    if not args.input and not args.text:
+        print("Error: Input file(s), directory, or -t/--text is required (e.g. 'make-audio .' or 'make-audio -t \"hello\"')", file=sys.stderr)
         print("Usage: make-audio [files_or_dirs...] [options]", file=sys.stderr)
+        print("       make-audio -t \"some text to speak\" [options]", file=sys.stderr)
         sys.exit(1)
 
-    files_to_process = collect_files(args.input)
-    if not files_to_process:
-        print(f"Error: No convertible files ({', '.join(sorted(SUPPORTED_EXTENSIONS))}) found in specified path(s).", file=sys.stderr)
+    if args.input and args.text:
+        print("Error: Cannot specify both file inputs and -t/--text at the same time.", file=sys.stderr)
         sys.exit(1)
-
-    is_batch = len(files_to_process) > 1 or (len(args.input) == 1 and Path(args.input[0]).is_dir())
-    if is_batch:
-        engine_str = f" (engine: {args.engine})" if args.verbose else ""
-        print(f"Found {len(files_to_process)} file(s) to convert{engine_str}:")
-        for f in files_to_process:
-            print(f"  • {f.name}")
 
     colab_instance = None
     if args.engine == "colab":
@@ -244,6 +259,100 @@ def main():
         )
 
     try:
+        # Handle direct text input (-t / --text)
+        if args.text:
+            cleaned_text = clean_markdown_for_tts(
+                args.text,
+                remove_display_equations=not args.keep_display_math,
+            )
+
+            if not cleaned_text.strip():
+                print("Error: Text is empty after cleaning.", file=sys.stderr)
+                sys.exit(1)
+
+            if args.save_cleaned_text:
+                if args.output:
+                    text_output_path = Path(args.output).with_suffix(".txt")
+                else:
+                    text_output_path = Path.cwd() / "text_cleaned.txt"
+                text_output_path.write_text(cleaned_text, encoding="utf-8")
+                if args.verbose:
+                    print(f"Cleaned plain-English text saved to: {text_output_path}")
+
+            if args.preview:
+                print("\n" + "=" * 50)
+                print("CLEANED TEXT PREVIEW:")
+                print("=" * 50)
+                print(cleaned_text)
+                print("=" * 50)
+                return
+
+            temp_audio_file = None
+            if args.output:
+                output_audio_path = Path(args.output).resolve()
+                is_temporary = False
+            else:
+                tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                output_audio_path = Path(tmp.name)
+                tmp.close()
+                temp_audio_file = output_audio_path
+                is_temporary = True
+                # Register atexit handler as extra guarantee
+                atexit.register(lambda p=output_audio_path: p.unlink(missing_ok=True))
+
+            try:
+                engine_str = f" (engine: {args.engine})" if args.verbose else ""
+                print(f"Synthesizing text{engine_str}...")
+
+                if args.engine == "colab":
+                    try:
+                        final_path = colab_instance.convert_to_audio_file(
+                            text=cleaned_text,
+                            output_path=output_audio_path,
+                            voice=args.voice,
+                            speed=args.speed,
+                            stop_session_after=False,
+                        )
+                    except Exception as e:
+                        if args.fallback_local:
+                            print(f"\n[make-audio] Colab error: {e}", file=sys.stderr)
+                            print("[make-audio] Falling back to local Kokoro-TTS engine...", file=sys.stderr)
+                            final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
+                        else:
+                            print(f"\n[make-audio] Colab error: {e}", file=sys.stderr)
+                            print("[make-audio] Tip: use '--fallback-local' to fall back on failure, or omit '--colab'.", file=sys.stderr)
+                            raise
+                else:
+                    final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
+
+                if not is_temporary:
+                    print(f"Audio file saved to: {final_path}")
+
+                # Play in terminal unless --no-play was specified
+                if not args.no_play:
+                    snippet = args.text[:60] + "..." if len(args.text) > 60 else args.text
+                    play_audio_in_terminal(final_path, title=snippet)
+            finally:
+                if is_temporary and temp_audio_file and temp_audio_file.exists():
+                    try:
+                        temp_audio_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            return
+
+        # Handle file / directory inputs
+        files_to_process = collect_files(args.input)
+        if not files_to_process:
+            print(f"Error: No convertible files ({', '.join(sorted(SUPPORTED_EXTENSIONS))}) found in specified path(s).", file=sys.stderr)
+            sys.exit(1)
+
+        is_batch = len(files_to_process) > 1 or (len(args.input) == 1 and Path(args.input[0]).is_dir())
+        if is_batch:
+            engine_str = f" (engine: {args.engine})" if args.verbose else ""
+            print(f"Found {len(files_to_process)} file(s) to convert{engine_str}:")
+            for f in files_to_process:
+                print(f"  • {f.name}")
+
         total_files = len(files_to_process)
         for idx, file_path in enumerate(files_to_process, 1):
             if is_batch:
@@ -329,6 +438,9 @@ def main():
                 final_path = _run_local_synthesis(args, cleaned_text, output_audio_path)
 
             print(f"Audio file saved to: {final_path}")
+
+            if args.play:
+                play_audio_in_terminal(final_path, title=file_path.name)
 
     finally:
         # Automatically stop Colab session when done unless user specifically asked to keep it

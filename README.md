@@ -13,8 +13,12 @@ Supports **Local Hardware (Default)** as well as **Google Colab Cloud GPU accele
 - **One-Flag Google Colab GPU Acceleration (`--colab`):**
   - Run with `--colab` to execute heavy neural TTS on Google Colab's cloud GPUs (NVIDIA Tesla T4).
   - **Zero-touch cleanup:** Google Colab VM is automatically shut down as soon as synthesis completes so you never burn compute units.
-- **Batch & Directory Conversion (`make-audio .`):**
-  - Running `make-audio .` automatically finds and converts every supported document (`.md`, `.txt`, `.pdf`) in the current directory into its respective `.wav` audio file.
+- **Direct Text-to-Speech & Interactive Terminal Playback (`-t` / `--text`):**
+  - Run `make-audio -t "Any text you want to hear"` to synthesize and play directly in the terminal without creating persistent files.
+  - Interactive controls directly from keyboard: pause/resume (`Space`), speed control (`[` and `]`), seek (`←`/`→` and `↓`/`↑`), volume (`9`/`0`), and stop (`q` or `Esc`).
+  - **Zero file residue:** Temporary audio files are automatically purged from disk as soon as playback finishes or is interrupted. Pass `-o output.wav` if you wish to persist the audio.
+- **Immediate Playback for Files (`--play`):**
+  - Add `--play` when converting documents (e.g. `make-audio notes.md --play`) to immediately launch interactive terminal playback.
 - **Supports Multiple Formats:**
   - Markdown (`.md`), plain text (`.txt`), and PDF (`.pdf`) files.
   - Page selection (`--pages 1-3`) for PDFs.
@@ -38,6 +42,38 @@ Supports **Local Hardware (Default)** as well as **Google Colab Cloud GPU accele
 
 ## 🛠️ Usage
 
+### Direct Text-to-Speech & Terminal Playback (`-t`)
+
+Synthesize any text and play it immediately in your terminal with real-time controls (no audio files left on disk):
+
+```bash
+# Speak text and play in terminal with interactive controls:
+make-audio -t "Artificial intelligence is advancing rapidly."
+
+# Speak with different voice and speed:
+make-audio -t "Attention is all you need." -v af_sarah -s 1.1
+
+# Save to file while playing:
+make-audio -t "Save and play this sentence." -o speech.wav
+
+# Preview cleaned spoken English without playing:
+make-audio -t "Let $\rho = 10^{-22}\text{ eV}$." --preview
+```
+
+#### ⌨️ Interactive Playback Controls
+
+When audio plays in the terminal, you have full interactive keyboard control via `mpv`:
+- `[Space]` : Pause / Resume
+- `[← / →]` : Seek backward / forward 5 seconds
+- `[↓ / ↑]` : Seek backward / forward 1 minute
+- `[[ / ]]` : Decrease / Increase speed by 10%
+- `[{ / }]` : Halve / Double speed
+- `[Backspace]` : Reset speed to 1.0x
+- `[9 / 0]` : Decrease / Increase volume
+- `[q / Esc]` : Stop & Quit immediately (cleans up any temp files)
+
+---
+
 ### Convert Every File in Current Directory (`.`)
 
 To convert all Markdown, text, and PDF files in your current directory:
@@ -56,13 +92,16 @@ make_audio . --colab
 # 1. Convert a Markdown file locally:
 make_audio notes.md
 
-# 2. Convert a plain text file locally:
+# 2. Convert and immediately play in terminal:
+make_audio notes.md --play
+
+# 3. Convert a plain text file locally:
 make_audio summary.txt
 
-# 3. Convert a PDF document locally:
+# 4. Convert a PDF document locally:
 make_audio paper.pdf --pages 1-3
 
-# 4. Convert using Google Colab GPU (automatically stops when finished):
+# 5. Convert using Google Colab GPU (automatically stops when finished):
 make_audio notes.md --colab
 ```
 
@@ -71,20 +110,20 @@ make_audio notes.md --colab
 ### CLI Options
 
 ```text
-usage: make-audio [-h] [-o OUTPUT] [-v VOICE] [-s SPEED] [-p PAGES]
-                  [-d {cuda,cpu}] [--colab] [--engine {local,colab}]
-                  [--colab-session COLAB_SESSION] [--colab-gpu COLAB_GPU]
-                  [--colab-timeout COLAB_TIMEOUT] [--keep-colab]
-                  [--stop-colab] [--fallback-local] [--keep-display-math]
-                  [--keep-references] [--save-cleaned-text] [--preview]
-                  [--verbose]
+usage: make-audio [-h] [-t TEXT] [--play] [--no-play] [-o OUTPUT] [-v VOICE]
+                  [-s SPEED] [-p PAGES] [-d {cuda,cpu}] [--colab]
+                  [--engine {local,colab}] [--colab-session COLAB_SESSION]
+                  [--colab-gpu COLAB_GPU] [--colab-timeout COLAB_TIMEOUT]
+                  [--keep-colab] [--stop-colab] [--fallback-local]
+                  [--keep-display-math] [--keep-references]
+                  [--save-cleaned-text] [--preview] [--verbose]
                   [input ...]
-
-positional arguments:
-  input                 Path to .md, .txt, .pdf file(s) or directory (e.g. '.') to convert
 
 options:
   -h, --help            Show help message and exit
+  -t, --text TEXT       Input text string directly to synthesize and play in terminal
+  --play                Play audio interactively in the terminal after generation
+  --no-play             Do not automatically play audio when using -t/--text
   -o, --output OUTPUT   Output audio filepath (.wav or .mp3) for a single file, or destination folder for batch conversion
   -v, --voice VOICE     Kokoro voice pack (default: af_heart)
   -s, --speed SPEED     Speaking speed multiplier (default: 1.0)
@@ -129,5 +168,6 @@ git reset --hard v0.1.0-local-baseline
 - [`src/pdf/colab_tts.py`](file:///home/omega496/make_audio/src/pdf/colab_tts.py): Google Colab CLI orchestrator (VM provisioning, payload transfer, remote execution, download, and auto-stop).
 - [`src/pdf/colab_worker.py`](file:///home/omega496/make_audio/src/pdf/colab_worker.py): Remote GPU worker script executed on the Colab VM.
 - [`src/pdf/tts.py`](file:///home/omega496/make_audio/src/pdf/tts.py): Original local Kokoro-TTS engine wrapper (fully preserved).
+- [`src/pdf/player.py`](file:///home/omega496/make_audio/src/pdf/player.py): Terminal interactive audio player with real-time speed, seek, volume, and pause controls (via `mpv`).
 - [`src/pdf/cleaner.py`](file:///home/omega496/make_audio/src/pdf/cleaner.py): Markdown, LaTeX, and formula cleaning engine.
 - [`src/pdf/pdf_extractor.py`](file:///home/omega496/make_audio/src/pdf/pdf_extractor.py): PDF text extraction and layout unwrapping.
