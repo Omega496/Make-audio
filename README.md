@@ -46,6 +46,38 @@ Supports **Local Hardware (Default)** as well as **Google Colab Cloud GPU accele
 
 ---
 
+## ⚡ Installation
+
+### 🤖 For AI Agents (1-Click Prompt Setup)
+If you are using an AI coding assistant (such as **Antigravity**, **Cursor**, **Claude Code**, **Cline**, or **Copilot**), copy and paste the prompt in [**`INSTALL.md`**](INSTALL.md#🤖-ai-agent-setup-prompt-copy--paste-to-your-ai) into your chat. Your AI agent will automatically install all system packages, configure `uv`, install dependencies, and run verification tests.
+
+### 👤 Quick Manual Setup (2 Steps)
+
+1. **Install system dependencies:**
+   ```bash
+   # Debian / Ubuntu / Linux Mint:
+   sudo apt update && sudo apt install -y mpv nano ffmpeg espeak-ng
+
+   # Arch Linux / Manjaro:
+   sudo pacman -S --needed mpv nano ffmpeg espeak-ng
+
+   # Fedora / RHEL:
+   sudo dnf install -y mpv nano ffmpeg espeak-ng
+
+   # macOS:
+   brew install mpv nano ffmpeg espeak-ng uv
+   ```
+
+2. **Install project dependencies with [`uv`](https://github.com/astral-sh/uv):**
+   ```bash
+   uv sync
+   source .venv/bin/activate
+   ```
+
+*For comprehensive instructions, AI agent prompts, and troubleshooting, see [**`INSTALL.md`**](INSTALL.md).*
+
+---
+
 ## 🛠️ Usage
 
 ### Interactive Nano Scratchpad (`--temp`)
@@ -197,6 +229,7 @@ git reset --hard v0.1.0-local-baseline
 
 ## 📂 Project Structure
 
+- [`INSTALL.md`](INSTALL.md): Comprehensive installation guide and copy-paste prompt for AI agents.
 - [`md_to_audio.py`](file:///home/omega496/make_audio/md_to_audio.py): Root CLI launcher script.
 - [`src/pdf/md_to_audio.py`](file:///home/omega496/make_audio/src/pdf/md_to_audio.py): Main CLI entry point, batch file collector, and engine dispatcher.
 - [`src/pdf/colab_tts.py`](file:///home/omega496/make_audio/src/pdf/colab_tts.py): Google Colab CLI orchestrator (VM provisioning, payload transfer, remote execution, download, and auto-stop).
