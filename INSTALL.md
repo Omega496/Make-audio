@@ -166,7 +166,7 @@ If you wish to offload speech synthesis to Google Colab's cloud GPUs (NVIDIA Tes
 
 1. Install the Google Colab CLI:
    ```bash
-   pip install google-colab-cli
+   uv pip install google-colab-cli
    ```
 2. Authorize Colab CLI with your Google account:
    ```bash
