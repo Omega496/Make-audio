@@ -19,6 +19,10 @@ pdf = "pdf.md_to_audio:main"
 md-to-audio = "pdf.md_to_audio:main"
 make_audio = "pdf.md_to_audio:main"
 make-audio = "pdf.md_to_audio:main"
+clean_md = "pdf.clean_md:main"
+clean-md = "pdf.clean_md:main"
+bengali_clean = "pdf.bengali_clean:main"
+bengali-clean = "pdf.bengali_clean:main"
 
 [build-system]
 requires = ["uv_build>=0.12.6,<0.13.0"]

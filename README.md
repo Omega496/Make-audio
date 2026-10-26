@@ -213,6 +213,100 @@ options:
 
 ---
 
+## 🧹 Markdown Cleaner CLI (`clean_md`)
+
+`clean_md` cleans Markdown documents containing complex LaTeX equations, flowcharts, Mermaid diagrams, code blocks, tables, and markup into clean, readable Markdown files (`<file_name>_cleaned.md`) optimized for Text-to-Speech narration or clean reading.
+
+```bash
+# Clean an English or Bengali markdown file (auto-detects language):
+clean_md notes.md
+
+# Force Bengali cleaning mode:
+clean_md bengali_notes.md --bengali
+
+# Strip all formulas completely without converting them:
+clean_md bengali_notes.md --strip-math
+
+# Specify custom output path:
+clean_md notes.md -o output.md
+
+# Preview cleaned text in the terminal without creating any files:
+clean_md notes.md --preview
+
+# Stream cleaned markdown directly to standard output (for piping):
+clean_md notes.md --stdout
+
+# Keep and convert display LaTeX equations ($$...$$) into spoken English (English files):
+clean_md notes.md --keep-display-math
+
+# Omit diagrams and code blocks without leaving placeholder text:
+clean_md notes.md --no-placeholders
+
+# Overwrite file in-place:
+clean_md notes.md --in-place
+
+# Batch clean all markdown files in a directory:
+clean_md docs/
+```
+
+### `clean_md` CLI Options
+
+```text
+usage: clean_md [-h] [-o OUTPUT] [-i] [--stdout] [--preview]
+                [--keep-display-math] [--strip-inline-math] [--drop-code]
+                [--drop-diagrams] [--no-placeholders]
+                [--code-placeholder CODE_PLACEHOLDER]
+                [--diagram-placeholder DIAGRAM_PLACEHOLDER]
+                [--lang {auto,en,bn}] [--bengali] [--strip-math] [-v]
+                input [input ...]
+
+options:
+  -h, --help            Show help message and exit
+  -o, --output OUTPUT   Output filepath (.md) for single file, or folder for batch cleaning
+  -i, --in-place        Overwrite input file(s) in place instead of creating a new cleaned file
+  --stdout              Print cleaned markdown to standard output instead of writing to a file
+  --preview             Display preview of cleaned text in terminal without modifying files
+  --keep-display-math   Convert display LaTeX equations ($$...$$) into spoken English instead of omitting
+  --strip-inline-math   Strip inline LaTeX equations instead of converting them to spoken English
+  --drop-code           Completely omit code blocks instead of inserting a placeholder description
+  --drop-diagrams       Completely omit diagrams and flowcharts instead of inserting a placeholder
+  --no-placeholders     Completely omit both code blocks and diagrams without inserting any placeholders
+  --code-placeholder    Custom placeholder text for code blocks
+  --diagram-placeholder Custom placeholder text for diagrams and flowcharts
+  --lang {auto,en,bn}   Language mode: 'auto' (detect automatically), 'en' (English), 'bn' (Bengali)
+  --bengali, --bn       Force Bengali markdown cleaning mode
+  --strip-math          Completely omit all LaTeX formulas
+  -v, --verbose         Show detailed processing progress and statistics
+```
+
+---
+
+## 🇧🇩 Dedicated Bengali Markdown Cleaner (`bengali_clean`)
+
+`bengali_clean` is specifically designed for cleaning Bengali Markdown files containing LaTeX equations, formulas, diagrams, and formatting into clean Markdown (`<file_name>_cleaned.md`) ready for Bengali TTS or reading:
+
+```bash
+# Clean a Bengali markdown file (generates <file_name>_cleaned.md):
+bengali_clean notes.md
+
+# Preview cleaned Bengali text in terminal:
+bengali_clean notes.md --preview
+
+# Completely strip all math formulas:
+bengali_clean notes.md --strip-math
+
+# Save to custom output:
+bengali_clean notes.md -o cleaned_notes.md
+```
+
+### Key Bengali Features
+- **No English Spoken Math Strings**: Eliminates English math expansions (`the integral from...`, `is approximately`, `equals`, `minus`, `alpha hat equals...`) from Bengali narration.
+- **Clean Scientific Notation**: Unwraps variables, units, and constants (`Phi`, `n`, `b = R_sun`, `2.95 km`, `2/b`, `R_S`, `Δt`) into clean readable symbols.
+- **Bengali Dari (`।`) Normalization**: Automatically normalizes sentences, table rows, and headers to end with proper Bengali Dari (`।`) without glitchy `।.` sequences.
+- **Pacing**: Chunks long paragraphs at Bengali Dari boundaries without breaking numbered lists (`১.`, `1.`).
+
+---
+
 ## ⏪ Reverting / Rollback to Pristine Local Baseline
 
 A permanent Git baseline was saved before making any Colab changes. If you ever decide you prefer the original 100% local project state, you can revert completely with:
@@ -230,11 +324,15 @@ git reset --hard v0.1.0-local-baseline
 ## 📂 Project Structure
 
 - [`INSTALL.md`](INSTALL.md): Comprehensive installation guide and copy-paste prompt for AI agents.
-- [`md_to_audio.py`](file:///home/omega496/make_audio/md_to_audio.py): Root CLI launcher script.
+- [`clean_md.py`](file:///home/omega496/make_audio/clean_md.py): Root CLI launcher script for markdown cleaning.
+- [`bengali_clean.py`](file:///home/omega496/make_audio/bengali_clean.py): Root CLI launcher script for Bengali markdown cleaning.
+- [`md_to_audio.py`](file:///home/omega496/make_audio/md_to_audio.py): Root CLI launcher script for audio synthesis.
+- [`src/pdf/clean_md.py`](file:///home/omega496/make_audio/src/pdf/clean_md.py): Markdown cleaner CLI tool and batch processor.
+- [`src/pdf/bengali_clean.py`](file:///home/omega496/make_audio/src/pdf/bengali_clean.py): Dedicated Bengali markdown cleaner CLI tool.
+- [`src/pdf/cleaner.py`](file:///home/omega496/make_audio/src/pdf/cleaner.py): Markdown, LaTeX, and formula cleaning engine (English and Bengali).
 - [`src/pdf/md_to_audio.py`](file:///home/omega496/make_audio/src/pdf/md_to_audio.py): Main CLI entry point, batch file collector, and engine dispatcher.
 - [`src/pdf/colab_tts.py`](file:///home/omega496/make_audio/src/pdf/colab_tts.py): Google Colab CLI orchestrator (VM provisioning, payload transfer, remote execution, download, and auto-stop).
 - [`src/pdf/colab_worker.py`](file:///home/omega496/make_audio/src/pdf/colab_worker.py): Remote GPU worker script executed on the Colab VM.
 - [`src/pdf/tts.py`](file:///home/omega496/make_audio/src/pdf/tts.py): Original local Kokoro-TTS engine wrapper (fully preserved).
 - [`src/pdf/player.py`](file:///home/omega496/make_audio/src/pdf/player.py): Terminal interactive audio player with real-time speed, seek, volume, and pause controls (via `mpv`).
-- [`src/pdf/cleaner.py`](file:///home/omega496/make_audio/src/pdf/cleaner.py): Markdown, LaTeX, and formula cleaning engine.
 - [`src/pdf/pdf_extractor.py`](file:///home/omega496/make_audio/src/pdf/pdf_extractor.py): PDF text extraction and layout unwrapping.

@@ -365,10 +365,18 @@ def remove_emojis(text: str) -> str:
     return emoji_pattern.sub('', text)
 
 
+DIAGRAM_LANGUAGES = {
+    'mermaid', 'plantuml', 'uml', 'dot', 'graphviz',
+    'flowchart', 'diagram', 'tikz', 'wavedrom', 'd2', 'nomnoml'
+}
+
+
 def clean_markdown_for_tts(
     markdown_text: str,
     remove_display_equations: bool = True,
     drop_code: bool = False,
+    drop_diagrams: bool = False,
+    strip_inline_math: bool = False,
     code_placeholder: str = "Please refer to the code block shown in the document.",
     diagram_placeholder: str = "Please refer to the diagram shown in the document.",
 ) -> str:
@@ -433,6 +441,8 @@ def clean_markdown_for_tts(
 
     # 8. Handle Inline Math ($...$ and \(...\))
     def handle_inline_math(m):
+        if strip_inline_math:
+            return ""
         inner = m.group(1)
         spoken = clean_math_to_spoken(inner)
         return f" {spoken} " if spoken else ""
@@ -446,7 +456,9 @@ def clean_markdown_for_tts(
     def handle_code_block(m):
         lang = (m.group(1) or "").strip().lower()
         code_content = m.group(2) or ""
-        if lang == 'mermaid' or is_ascii_diagram(code_content):
+        if lang in DIAGRAM_LANGUAGES or is_ascii_diagram(code_content):
+            if drop_diagrams:
+                return ""
             return f"\n\n{diagram_placeholder}\n\n" if diagram_placeholder else "\n\n"
         if drop_code:
             return ""
@@ -590,6 +602,338 @@ def clean_markdown_for_tts(
     cleaned_paragraphs = []
     current_para = []
 
+    def _flush_para(lines: List[str]):
+        if not lines:
+            return
+        raw_block = '\n'.join(lines)
+        if is_ascii_diagram(raw_block):
+            if not drop_diagrams and diagram_placeholder:
+                cleaned_paragraphs.append(diagram_placeholder)
+            return
+        para_text = ' '.join(lines)
+        para_text = re.sub(r'\s+', ' ', para_text).strip()
+        if para_text:
+            cleaned_paragraphs.extend(_split_long_para(para_text))
+
+    for line in raw_paragraphs:
+        stripped = line.strip()
+        if stripped:
+            current_para.append(stripped)
+        else:
+            if current_para:
+                _flush_para(current_para)
+                current_para = []
+
+    if current_para:
+        _flush_para(current_para)
+
+    cleaned_text = '\n\n'.join(cleaned_paragraphs)
+    return cleaned_text
+
+
+# ---------------------------------------------------------------------------
+# Bengali Markdown & Math Cleaning Functions
+# ---------------------------------------------------------------------------
+
+def is_bengali_text(text: str) -> bool:
+    """
+    Detect if text contains significant Bengali characters.
+    """
+    bengali_chars = len(re.findall(r'[\u0980-\u09ff]', text))
+    return bengali_chars > 20
+
+
+def clean_bengali_math_plain(expr: str, strip_all: bool = False) -> str:
+    """
+    Clean or unwrap a LaTeX math expression for Bengali narration into clean plain notation,
+    without inserting English spoken phrases.
+    """
+    if strip_all:
+        return ""
+
+    s = expr.strip()
+    if s.startswith('$') and s.endswith('$'):
+        s = s[1:-1].strip()
+
+    # Check if expression ends in a scalar value after calculus, e.g. = 2
+    m_calc = re.search(r'=\s*([0-9a-zA-Z/]+)\s*$', s)
+    if m_calc and any(k in s for k in [r'\int', r'\cos', r'\sin', r'\sec', r'\tan']):
+        return m_calc.group(1)
+
+    # 1. Un-nest text wrappers
+    s = re.sub(r'\\(?:text|mathrm|mathbf|mathit|operatorname|rm)\{([^}]+)\}', r'\1', s)
+    s = re.sub(r'\\rm(?![a-zA-Z])', '', s)
+
+    # 2. Astrophysics and physics symbols
+    s = re.sub(r'\\odot', 'sun', s)
+    s = re.sub(r"1''\.(\d+)", r"1.\1", s)
+    s = re.sub(r"(\d+)''", r"\1 arcsec", s)
+    s = re.sub(r'\\theta_\{?E\}?', 'theta_E', s)
+    s = re.sub(r'\\Sigma_\{?(?:\\rm\s*)?cr\}?', 'Sigma_cr', s)
+    s = re.sub(r'\\Delta\s*t', 'Delta t', s)
+    s = re.sub(r'\\Delta(?![a-zA-Z])', 'Delta', s)
+    s = re.sub(r'\\nabla_\\perp|\\nabla.*\\perp', 'nabla_perp', s)
+    s = re.sub(r'\\nabla(?![a-zA-Z])', 'nabla', s)
+    s = re.sub(r'\\partial(?![a-zA-Z])', 'd', s)
+
+    # 3. Vector and accent decorators
+    s = re.sub(r'\\(?:vec|hat|bar|tilde|dot)\{([^}]+)\}', r'\1', s)
+
+    # 4. Standard trig / calculus functions
+    s = re.sub(r'\\(sin|cos|tan|sec|csc|cot|log|ln|exp)(?![a-zA-Z])', r'\1 ', s)
+
+    # 5. Fractions (up to 3 levels)
+    for _ in range(3):
+        s = re.sub(r'\\frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1/\2)', s)
+    s = re.sub(r'\\frac\s*\{?([a-zA-Z0-9]+)\}?\s*\{?([a-zA-Z0-9]+)\}?', r'(\1/\2)', s)
+
+    # 6. Math relations
+    s = re.sub(r'\\ll(?![a-zA-Z])', '<<', s)
+    s = re.sub(r'\\gg(?![a-zA-Z])', '>>', s)
+    s = re.sub(r'\\leq(?![a-zA-Z])|\\le(?![a-zA-Z])', '<=', s)
+    s = re.sub(r'\\geq(?![a-zA-Z])|\\ge(?![a-zA-Z])', '>=', s)
+    s = re.sub(r'\\neq(?![a-zA-Z])|\\ne(?![a-zA-Z])', '!=', s)
+    s = re.sub(r'\\approx(?![a-zA-Z])|\\simeq(?![a-zA-Z])|\\sim(?![a-zA-Z])', '≈', s)
+    s = re.sub(r'\\times(?![a-zA-Z])', '×', s)
+    s = re.sub(r'\\cdot(?![a-zA-Z])', '·', s)
+    s = re.sub(r'\\pm(?![a-zA-Z])', '±', s)
+    s = re.sub(r'\\infty(?![a-zA-Z])', 'infinity', s)
+
+    # 7. Greek letters
+    for grk, rep in GREEK_LETTERS.items():
+        s = re.sub(rf'\\{grk}(?![a-zA-Z])', rep, s)
+
+    # 8. Roots
+    s = re.sub(r'\\sqrt\{([^{}]+)\}', r'sqrt(\1)', s)
+
+    # 9. Clean delimiters & braces
+    s = re.sub(r'\\left\(|\\right\)', '', s)
+    s = re.sub(r'\\left\[|\\right\]', '', s)
+    s = re.sub(r'\\left\||\\right\|', '|', s)
+    s = re.sub(r'\\left\\\{|\\right\\\}', '', s)
+    s = re.sub(r'\\[,;! ]', ' ', s)
+
+    # 10. Clean subscripts & superscripts
+    s = re.sub(r'_\{([^}]+)\}', r'_\1', s)
+    s = re.sub(r'\^\{([^}]+)\}', r'^\1', s)
+
+    # Remove remaining backslashes and braces
+    s = re.sub(r'\\[a-zA-Z]+', '', s)
+    s = s.replace('{', '').replace('}', '')
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def clean_bengali_markdown(
+    markdown_text: str,
+    strip_math: bool = False,
+) -> str:
+    """
+    Clean Bengali markdown or text for reading / TTS:
+    - Normalizes line endings, strips YAML frontmatter, HTML tags, and comments
+    - Removes LaTeX display equations and cleanly converts/simplifies inline math
+    - Converts markdown tables into natural Bengali spoken sentences
+    - Strips code blocks, diagrams, and emojis
+    - Normalizes Bengali punctuation (Dari '।') and spacing
+    - Paces paragraphs with Dari-aware sentence chunking
+    """
+    text = markdown_text.replace('\r\n', '\n').replace('\r', '\n')
+
+    # 1. Strip YAML frontmatter
+    text = re.sub(r'^---\s*\n.*?\n---\s*\n', '', text, flags=re.DOTALL)
+
+    # 2. Strip HTML comments, control chars, media
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+    text = re.sub(r'[\ufffd\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+', '', text)
+    text = re.sub(r'<(?:svg|video|audio|progress|meter)\b[^>]*>.*?</(?:svg|video|audio|progress|meter)>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'</?(?:details|summary)\b[^>]*>', '', text, flags=re.IGNORECASE)
+
+    # 3. Strip images
+    text = re.sub(r'\[!\[.*?\]\(.*?\)\]\(.*?\)', '', text)
+    text = re.sub(r'!\[.*?\]\(.*?\)', '', text)
+
+    # 4. Remove display equations ($$...$$ and \[...\])
+    # If display math follows a colon at the end of a line, change the colon to a Bengali Dari '।'
+    text = re.sub(r':[ \t]*\n[ \t]*\$\$[\s\S]*?\$\$', '।\n\n', text)
+    text = re.sub(r'\$\$[\s\S]*?\$\$', '\n\n', text)
+    text = re.sub(r':[ \t]*\n[ \t]*\\\[[\s\S]*?\\\]', '।\n\n', text)
+    text = re.sub(r'\\\[[\s\S]*?\\\]', '\n\n', text)
+
+    # 5. Clean inline LaTeX math ($...$ and \(...\)) BEFORE tables
+    def _repl_inline(m):
+        raw = m.group(1)
+        cleaned = clean_bengali_math_plain(raw, strip_all=strip_math)
+        return f" {cleaned} " if cleaned else ""
+
+    text = re.sub(r'(?<!\$)\$(?!\$)([^\$\n]+?)(?<!\$)\$(?!\$)', _repl_inline, text)
+    text = re.sub(r'\\\(([^)]+)\\\)', _repl_inline, text)
+    text = text.replace('$', '')
+
+    # 6. Remove code blocks and diagrams
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    text = re.sub(r'~~~[\s\S]*?~~~', '', text)
+
+    # 7. Convert Markdown Tables into spoken Bengali sentences
+    def convert_bengali_table(table_block: str) -> str:
+        lines = [line.strip() for line in table_block.strip().split('\n') if line.strip()]
+        if len(lines) < 2:
+            return ""
+        sep_idx = -1
+        for i, line in enumerate(lines):
+            if re.match(r'^\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$', line):
+                sep_idx = i
+                break
+        data_rows = lines[sep_idx + 1:] if sep_idx != -1 else lines
+        spoken_rows = []
+        for row in data_rows:
+            r = row.strip()
+            if r.startswith('|'):
+                r = r[1:]
+            if r.endswith('|'):
+                r = r[:-1]
+            cols = [c.strip() for c in re.split(r'\s+\|\s+', r) if c.strip()]
+            if not cols:
+                continue
+            first = cols[0]
+            cleaned_cols = []
+            for c in cols[1:]:
+                c_clean = c.rstrip('.। ')
+                if c_clean:
+                    cleaned_cols.append(c_clean)
+            if cleaned_cols:
+                body = '। '.join(cleaned_cols)
+                spoken_rows.append(f"{first}: {body}।")
+            else:
+                spoken_rows.append(f"{first}।")
+        return '\n\n'.join(spoken_rows)
+
+    table_pattern = re.compile(r'(?:^[ \t]*\|.*\|[ \t]*$\n?)+', re.MULTILINE)
+    text = table_pattern.sub(lambda m: convert_bengali_table(m.group(0)), text)
+
+    # 8. GitHub callouts
+    text = re.sub(r'^\s*>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', r'\1:', text, flags=re.MULTILINE | re.IGNORECASE)
+
+    # 9. Strip HTML tags
+    text = re.sub(r'</?[a-zA-Z][a-zA-Z0-9]*(?:\s+[^>]*)?/?>', ' ', text)
+
+    # 10. Links and URLs
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    text = re.sub(r'https?://\S+', '', text)
+
+    # 11. Inline code (`code`)
+    text = re.sub(r'`([^`\n]+)`', r'\1', text)
+
+    # 12. Blockquotes and horizontal rules
+    text = re.sub(r'^[ \t]*[-*_]{3,}[ \t]*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^[ \t]*>+[ \t]*', '', text, flags=re.MULTILINE)
+
+    # 13. Headers: strip '#' and ensure Bengali Dari '।' or ':' at end
+    def handle_bengali_header(m):
+        h = m.group(2).strip()
+        if not h:
+            return ''
+        if h[-1] not in '।!?:.':
+            h += '।'
+        elif h[-1] == '.':
+            h = h[:-1] + '।'
+        return f"\n\n{h}\n\n"
+
+    text = re.sub(r'^(#{1,6})[ \t]+(.+)$', handle_bengali_header, text, flags=re.MULTILINE)
+
+    # 14. Numbered and bullet list items
+    def handle_bengali_numbered(m):
+        num = m.group(1)
+        content = m.group(2).strip()
+        if content and content[-1] not in '।!?:.':
+            content += '।'
+        elif content and content[-1] == '.':
+            content = content[:-1] + '।'
+        return f"\n\n{num}. {content}\n\n"
+
+    text = re.sub(r'^[ \t]*(\d+|[০-৯]+)\.[ \t]+(.+)$', handle_bengali_numbered, text, flags=re.MULTILINE)
+
+    def handle_bengali_bullet(m):
+        content = m.group(1).strip()
+        if content and content[-1] not in '।!?:.':
+            content += '।'
+        elif content and content[-1] == '.':
+            content = content[:-1] + '।'
+        return f"\n- {content}\n"
+
+    text = re.sub(r'^[ \t]*[*+-][ \t]+(.+)$', handle_bengali_bullet, text, flags=re.MULTILINE)
+
+    # 15. Bold, italics, strikethrough
+    text = re.sub(r'~~(.*?)~~', r'\1', text)
+    text = re.sub(r'\*\*\*(.*?)\*\*\*', r'\1', text)
+    text = re.sub(r'___(.*?)___', r'\1', text)
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'__(.*?)__', r'\1', text)
+    text = re.sub(r'\*(.*?)\*', r'\1', text)
+    text = re.sub(r'_(.*?)_', r'\1', text)
+    text = text.replace('*', '')
+
+    # 16. Emojis and symbols
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"
+        "\U0001F300-\U0001F5FF"
+        "\U0001F680-\U0001F6FF"
+        "\U0001F1E0-\U0001F1FF"
+        "\U00002702-\U000027B0"
+        "\U000024C2-\U0001F251"
+        "\U0001F900-\U0001F9FF"
+        "\U0001FA00-\U0001FA6F"
+        "\U0001FA70-\U0001FAFF"
+        "\U00002600-\U000026FF"
+        "\U00002300-\U000023FF"
+        "\U00002B00-\U00002BFF"
+        "]+",
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub('', text)
+
+    # 17. Clean punctuation glitches
+    text = re.sub(r':\s*।', '।', text)
+    text = re.sub(r'।\s*\.', '।', text)
+    text = re.sub(r'\.\s*।', '।', text)
+    text = re.sub(r'।{2,}', '।', text)
+    # Fix spaces inside parentheses: '( x )' -> '(x)'
+    text = re.sub(r'\(\s+', '(', text)
+    text = re.sub(r'\s+\)', ')', text)
+    # Fix spaces around hyphens in Bengali suffix: e.g. 'Phi -এ' -> 'Phi-এ', 'b -কে' -> 'b-কে'
+    text = re.sub(r'([a-zA-Z0-9_]+)\s*-\s*([এওয়েরকেতে])', r'\1-\2', text)
+    # Fix empty parentheses
+    text = re.sub(r'\(\s*[:,-]?\s*\)', '', text)
+    text = re.sub(r'\[\s*[:,-]?\s*\]', '', text)
+    # Clean spaces before punctuation
+    text = re.sub(r'[ \t]+([।,!?:;])', r'\1', text)
+    text = re.sub(r'  +', ' ', text)
+
+    # 18. Paragraph pacing with sentence-boundary chunking
+    def _split_bengali_para(para: str, max_chars: int = 500):
+        if len(para) <= max_chars:
+            return [para]
+        sentences = re.split(r'(?<!\b\d)(?<!\b[০-৯])(?<=[।!?])\s+', para)
+        chunks = []
+        cur = []
+        cur_len = 0
+        for s in sentences:
+            s_len = len(s)
+            if cur and (cur_len + s_len > max_chars):
+                chunks.append(" ".join(cur))
+                cur = [s]
+                cur_len = s_len
+            else:
+                cur.append(s)
+                cur_len += s_len
+        if cur:
+            chunks.append(" ".join(cur))
+        return chunks
+
+    raw_paragraphs = text.split('\n')
+    cleaned_paragraphs = []
+    current_para = []
+
     for line in raw_paragraphs:
         stripped = line.strip()
         if stripped:
@@ -599,14 +943,14 @@ def clean_markdown_for_tts(
                 para_text = ' '.join(current_para)
                 para_text = re.sub(r'\s+', ' ', para_text).strip()
                 if para_text:
-                    cleaned_paragraphs.extend(_split_long_para(para_text))
+                    cleaned_paragraphs.extend(_split_bengali_para(para_text))
                 current_para = []
 
     if current_para:
         para_text = ' '.join(current_para)
         para_text = re.sub(r'\s+', ' ', para_text).strip()
         if para_text:
-            cleaned_paragraphs.extend(_split_long_para(para_text))
+            cleaned_paragraphs.extend(_split_bengali_para(para_text))
 
-    cleaned_text = '\n\n'.join(cleaned_paragraphs)
-    return cleaned_text
+    return '\n\n'.join(cleaned_paragraphs)
+

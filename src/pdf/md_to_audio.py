@@ -185,7 +185,7 @@ def collect_files(input_args: List[str]) -> List[Path]:
                     continue
                 if f.name.startswith("."):
                     continue
-                if f.name.endswith("_cleaned.txt"):
+                if f.name.endswith("_cleaned.txt") or f.name.endswith("_cleaned.md"):
                     continue
                 if f.name.lower() in IGNORE_FILENAMES:
                     continue
