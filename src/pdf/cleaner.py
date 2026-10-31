@@ -129,6 +129,105 @@ def is_ascii_diagram(text: str) -> bool:
     return False
 
 
+def find_balanced_braces(s: str, start_pos: int):
+    """Find matching closing brace for the brace starting at start_pos."""
+    if start_pos >= len(s) or s[start_pos] != '{':
+        return None, start_pos
+    depth = 0
+    for i in range(start_pos, len(s)):
+        if s[i] == '{':
+            depth += 1
+        elif s[i] == '}':
+            depth -= 1
+            if depth == 0:
+                return s[start_pos + 1:i], i + 1
+    return None, start_pos
+
+
+def replace_fractions(text: str, bengali: bool = False) -> str:
+    """
+    Replace LaTeX \\frac{num}{den} with (num over den) or (num/den),
+    supporting arbitrarily nested curly braces and nested fractions.
+    """
+    idx = 0
+    res = []
+    while idx < len(text):
+        frac_pos = text.find(r'\frac', idx)
+        if frac_pos == -1:
+            res.append(text[idx:])
+            break
+        res.append(text[idx:frac_pos])
+        curr = frac_pos + 5
+        while curr < len(text) and text[curr].isspace():
+            curr += 1
+        num, next_pos = find_balanced_braces(text, curr)
+        if num is not None:
+            curr = next_pos
+            while curr < len(text) and text[curr].isspace():
+                curr += 1
+            den, end_pos = find_balanced_braces(text, curr)
+            if den is not None:
+                num_cleaned = replace_fractions(num, bengali)
+                den_cleaned = replace_fractions(den, bengali)
+                if bengali:
+                    res.append(f"({num_cleaned}/{den_cleaned})")
+                else:
+                    res.append(f"({num_cleaned} over {den_cleaned})")
+                idx = end_pos
+                continue
+        # Fallback for single-token fraction, e.g. \frac 1 2
+        m_single = re.match(r'\\frac\s*\{?([a-zA-Z0-9]+)\}?\s*\{?([a-zA-Z0-9]+)\}?', text[frac_pos:])
+        if m_single:
+            if bengali:
+                res.append(f"({m_single.group(1)}/{m_single.group(2)})")
+            else:
+                res.append(f"({m_single.group(1)} over {m_single.group(2)})")
+            idx = frac_pos + m_single.end()
+        else:
+            res.append(text[frac_pos:frac_pos + 5])
+            idx = frac_pos + 5
+    return "".join(res)
+
+
+def unwrap_font_wrappers(text: str) -> str:
+    """
+    Unwrap LaTeX font and text wrappers like \\text{...}, \\mathbf{...}, \\mathrm{...},
+    supporting nested wrappers.
+    """
+    macros = ["text", "mathrm", "mathbf", "mathcal", "operatorname", "mathit", "boldsymbol", "bm", "rm", "textbf", "textit"]
+    changed = True
+    while changed:
+        changed = False
+        for macro in macros:
+            pattern = "\\" + macro
+            idx = 0
+            res = []
+            while idx < len(text):
+                pos = text.find(pattern, idx)
+                if pos == -1:
+                    res.append(text[idx:])
+                    break
+                after = pos + len(pattern)
+                if after < len(text) and text[after].isalpha():
+                    res.append(text[idx:after])
+                    idx = after
+                    continue
+                res.append(text[idx:pos])
+                curr = after
+                while curr < len(text) and text[curr].isspace():
+                    curr += 1
+                inner, end_pos = find_balanced_braces(text, curr)
+                if inner is not None:
+                    res.append(" " + inner + " ")
+                    idx = end_pos
+                    changed = True
+                else:
+                    res.append(text[pos:after])
+                    idx = after
+            text = "".join(res)
+    return text
+
+
 def clean_math_to_spoken(expr: str) -> str:
     """
     Convert mathematical / scientific expressions into spoken plain English.
@@ -139,10 +238,52 @@ def clean_math_to_spoken(expr: str) -> str:
     elif s.startswith('$') and s.endswith('$'):
         s = s[1:-1].strip()
 
-    # 1. Specific units, astrophysics and chemistry constants
+    # Unwrap font wrappers first so nested wrappers like \mathbf{...\text{...}} are handled
+    s = unwrap_font_wrappers(s)
+
+    # 1. Degrees, arcseconds, arcminutes, percent
+    # Degrees
+    s = re.sub(r'1\s*\^\\circ\b|1\s*\^\{\\circ\}', '1 degree', s)
+    s = re.sub(r'(\d+(?:\.\d+)?)\s*\^\\circ\b|(\d+(?:\.\d+)?)\s*\^\{\\circ\}', r'\1 degrees', s)
+    s = re.sub(r'\^\\circ\b|\^\{\\circ\}|\\circ\b', ' degrees', s)
+
+    # Arcseconds / Arcminutes
+    s = re.sub(r"1\s*''|1\s*\"|1\s*\\prime\\prime(?![a-zA-Z])", '1 arcsecond', s)
+    s = re.sub(r"(\d+(?:\.\d+)?)\s*''|(\d+(?:\.\d+)?)\s*\"|(\d+(?:\.\d+)?)\s*\\prime\\prime(?![a-zA-Z])", r'\1 arcseconds', s)
+    s = re.sub(r"1\s*'|1\s*\\prime(?![a-zA-Z])", '1 arcminute', s)
+    s = re.sub(r"(\d+(?:\.\d+)?)\s*'|(\d+(?:\.\d+)?)\s*\\prime(?![a-zA-Z])", r'\1 arcminutes', s)
+    s = re.sub(r"^\s*''\s*$|^\s*\"\s*$", 'arcseconds', s)
+    s = re.sub(r"^\s*'\s*$", 'arcminutes', s)
+
+    # Per units
+    s = re.sub(r'/\s*(?:\\text\{pixel\}|pixel)\b', ' per pixel', s)
+    s = re.sub(r'/\s*(?:\\text\{arcsec\}|arcsec)\b', ' per arcsecond', s)
+    s = re.sub(r'\\text\{km\}/\\text\{s\}|km/s\b', ' kilometers per second', s)
+    s = re.sub(r'\\text\{m\}/\\text\{s\}|m/s\b', ' meters per second', s)
+
+    # Percent
+    s = re.sub(r'(\d+(?:\.\d+)?)\s*\\%', r'\1 percent', s)
+    s = re.sub(r'\\%', ' percent', s)
+
+    # Astrophysics units (Megaparsecs, kiloparsecs, parsecs, etc.)
+    s = re.sub(r'\b1\s*(?:\\text\{Mpc\}|Mpc)\b', '1 Megaparsec', s)
+    s = re.sub(r'(\d+(?:\.\d+)?)\s*(?:\\text\{Mpc\}|Mpc)\b', r'\1 Megaparsecs', s)
+    s = re.sub(r'\\text\{Mpc\}|\bMpc\b', 'Megaparsecs', s)
+    s = re.sub(r'\b1\s*(?:\\text\{kpc\}|kpc)\b', '1 kiloparsec', s)
+    s = re.sub(r'(\d+(?:\.\d+)?)\s*(?:\\text\{kpc\}|kpc)\b', r'\1 kiloparsecs', s)
+    s = re.sub(r'\\text\{kpc\}|\bkpc\b', 'kiloparsecs', s)
+    s = re.sub(r'\b1\s*(?:\\text\{pc\}|pc)\b', '1 parsec', s)
+    s = re.sub(r'(\d+(?:\.\d+)?)\s*(?:\\text\{pc\}|pc)\b', r'\1 parsecs', s)
+    s = re.sub(r'\\text\{pc\}|\bpc\b', 'parsecs', s)
+    s = re.sub(r'\\text\{rad\}|\brad\b', ' radians', s)
+    s = re.sub(r'\\text\{arcsec\}|\barcsec\b', ' arcseconds', s)
+    s = re.sub(r'\\text\{arcmin\}|\barcmin\b', ' arcminutes', s)
+    s = re.sub(r'\b1\s*(?:solar masses|solar mass)\b', '1 solar mass', s)
+    s = re.sub(r'M_\\odot\b|M_\{\\odot\}|\\text\{M\}_\{\\odot\}|Msun\b', ' solar masses ', s)
+    s = re.sub(r'\\odot', ' sun ', s)
+
+    # Specific units, astrophysics and chemistry constants
     s = re.sub(r'1\\,\s*\\text\{rad\}\s*\\approx\s*206,?265\'\'', '1 radian is approximately 206,265 arcseconds', s)
-    s = re.sub(r'(\d+)\'\'', r'\1 arcseconds', s)
-    s = re.sub(r'(\d+)\'', r'\1 arcminutes', s)
     s = re.sub(r'\\text\{H\}_2\\text\{O\}|H_2O', 'H 2 O', s)
     s = re.sub(r'E\s*=\s*mc\^2', 'E equals m c squared', s)
 
@@ -209,8 +350,8 @@ def clean_math_to_spoken(expr: str) -> str:
         s = re.sub(r'\\begin\{aligned\}|\\end\{aligned\}|\\begin\{align\*?\}|\\end\{align\*?\}', '', s)
         s = s.replace('&', ' ').replace(r'\\', ' . ')
 
-    # 3. Fonts and Text Wrappers
-    s = re.sub(r'\\(text|mathrm|mathbf|mathcal|operatorname|mathit)\{([^}]+)\}', r' \2 ', s)
+    # 3. Fractions (using balanced braces to support arbitrary nested braces)
+    s = replace_fractions(s, bengali=False)
 
     # 4. Calculus (Limits, Integrals, Sums, Partials)
     s = re.sub(r'\\lim_\{([^{}]+)\\to\s*([^{}]+)\}', r'the limit as \1 approaches \2 of ', s)
@@ -220,44 +361,41 @@ def clean_math_to_spoken(expr: str) -> str:
     s = re.sub(r'\\sum', 'the sum of ', s)
     s = re.sub(r'\\frac\{\\partial\s*([A-Za-z])\}\{\\partial\s*([A-Za-z])\}', r'partial \1 over partial \2', s)
 
-    # 5. Fractions (up to 5 nested levels)
-    for _ in range(5):
-        if r'\frac' not in s:
-            break
-        s = re.sub(r'\\frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1 over \2)', s)
-    s = re.sub(r'\\frac\s*\{?([a-zA-Z0-9]+)\}?\s*\{?([a-zA-Z0-9]+)\}?', r'(\1 over \2)', s)
-
-    # 6. Roots
+    # 5. Roots
     for _ in range(3):
         if r'\sqrt' not in s:
             break
         s = re.sub(r'\\sqrt\[([^\]]+)\]\{([^{}]+)\}', r'the \1 root of \2', s)
         s = re.sub(r'\\sqrt\{([^{}]+)\}', r'the square root of (\1)', s)
 
-    # 7. Parentheses and Braces Delimiters
+    # 6. Parentheses and Braces Delimiters
     s = re.sub(r'\\left\(|\\right\)', ' ', s)
     s = re.sub(r'\\left\[|\\right\]', ' ', s)
     s = re.sub(r'\\left\\\{|\\right\\\}', ' ', s)
     s = re.sub(r'\\left\||\\right\|', ' ', s)
 
-    # 8. Math Operators and Relations
+    # 7. Math Operators and Relations
+    s = re.sub(r'\\equiv\b', ' is defined as ', s)
+    s = re.sub(r'\\xrightarrow\[(.*?)\]\{(.*?)\}', r' \2 ', s)
+    s = re.sub(r'\\xrightarrow\{(.*?)\}', ' maps to ', s)
+
     for pat, rep in MATH_OPERATORS:
         s = re.sub(pat, rep, s)
     for pat, rep in MATH_RELATIONS:
         s = re.sub(pat, rep, s)
 
-    # 9. Greek Letters
+    # 8. Greek Letters (use (?![a-zA-Z]) so subscripts like \theta_E match)
     for greek, spoken in GREEK_LETTERS.items():
-        s = re.sub(rf'\\{greek}\b', f' {spoken} ', s)
+        s = re.sub(r'\\' + greek + r'(?![a-zA-Z])', f' {spoken} ', s)
 
-    # 10. Vector and Accent Decorators
+    # 9. Vector and Accent Decorators
     s = re.sub(r'\\vec\{([^}]+)\}', r'\1 vector', s)
     s = re.sub(r'\\hat\{([^}]+)\}', r'\1 hat', s)
     s = re.sub(r'\\bar\{([^}]+)\}', r'\1 bar', s)
     s = re.sub(r'\\tilde\{([^}]+)\}', r'\1 tilde', s)
     s = re.sub(r'\\dot\{([^}]+)\}', r'\1 dot', s)
 
-    # 11. Powers and Exponents
+    # 10. Powers and Exponents
     s = re.sub(r'10\^\{-(\d+)\}|10\^-(\d+)', r'10 to the minus \1\2', s)
     s = re.sub(r'10\^\{(\d+)\}|10\^(\d+)', r'10 to the \1\2', s)
     s = re.sub(r'r\^\{-1\}|r\^-1', 'r to the minus 1', s)
@@ -267,7 +405,7 @@ def clean_math_to_spoken(expr: str) -> str:
     s = re.sub(r'\^\{([^{}]+)\}', r' to the power of \1 ', s)
     s = re.sub(r'\^([0-9a-zA-Z])', r' to the power of \1 ', s)
 
-    # 12. Subscripts
+    # 11. Subscripts
     def clean_sub(m):
         c = m.group(1).replace('_', ' ').strip()
         if c == 'cr': return ' critical'
@@ -279,7 +417,7 @@ def clean_math_to_spoken(expr: str) -> str:
     s = re.sub(r'_\{([^{}]+)\}', clean_sub, s)
     s = re.sub(r'_([0-9a-zA-Z])', r' \1', s)
 
-    # 13. Clean remaining LaTeX markers
+    # 12. Clean remaining LaTeX markers
     s = re.sub(r'\\[a-zA-Z]+', ' ', s)
     s = re.sub(r'[{}]', '', s)
     s = s.replace('=', ' equals ')
@@ -288,13 +426,18 @@ def clean_math_to_spoken(expr: str) -> str:
     s = s.replace(r'\,', ' ')
     s = s.replace('&', ' and ')
     s = s.replace('|', ' ')
+    s = re.sub(r'\s*<\s*', ' is less than ', s)
+    s = re.sub(r'\s*>\s*', ' is greater than ', s)
 
-    # 14. Expand standalone units attached to numbers
+    # 13. Expand standalone units attached to numbers
     s = re.sub(r'(\b\d+(?:\.\d+)?\s*)eV\b', r'\1 electron volts', s)
     s = re.sub(r'(\b\d+(?:\.\d+)?\s*)m\b', r'\1 meters', s)
     s = re.sub(r'(\b\d+(?:\.\d+)?\s*)cm\b', r'\1 centimeters', s)
     s = re.sub(r'(\b\d+(?:\.\d+)?\s*)km\b', r'\1 kilometers', s)
     s = re.sub(r'(\b\d+(?:\.\d+)?\s*)s\b', r'\1 seconds', s)
+
+    # Clean stray quotes
+    s = re.sub(r"['\"]+", '', s)
 
     s = re.sub(r'\s+', ' ', s).strip()
     return s
@@ -402,30 +545,46 @@ def clean_markdown_for_tts(
     # 1. Strip YAML frontmatter if present
     text = re.sub(r'^---\s*\n.*?\n---\s*\n', '', text, flags=re.DOTALL)
 
-    # 2. Strip HTML comments, control characters, and replacement chars
+    # 2. Strip AI agent / tool execution logs
+    # e.g. "Ran list files in workspace", "Analyzed README.md:L1-24", "Ran ... · Exited with code 127"
+    text = re.sub(
+        r'^[ \t]*(?:Ran\s+.*|Analyzed\s+.*(?::L\d+.*)?|Viewed\s+.*|Inspected\s+.*|Checked\s+.*|Read\s+.*)(?:\s*·\s*Exited with code\s+\d+)?$\n?',
+        '',
+        text,
+        flags=re.MULTILINE
+    )
+
+    # 3. Strip HTML comments, control characters, and replacement chars
     text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
     text = re.sub(r'[\ufffd\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+', '', text)
 
-    # 3. Strip HTML media elements (<svg>, <video>, <audio>)
+    # 4. Strip HTML media elements (<svg>, <video>, <audio>)
     text = re.sub(r'<svg\b[^>]*>.*?</svg>', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'<video\b[^>]*>.*?</video>', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'<audio\b[^>]*>.*?</audio>', '', text, flags=re.DOTALL | re.IGNORECASE)
 
-    # 4. Handle HTML <summary>, <details>, <progress>, <meter>
+    # 5. Handle HTML <summary>, <details>, <progress>, <meter>
     text = re.sub(r'<summary\b[^>]*>(.*?)</summary>', r'\n\1\n', text, flags=re.IGNORECASE)
     text = re.sub(r'</?details\b[^>]*>', '', text, flags=re.IGNORECASE)
     text = re.sub(r'<progress[^>]*value="([^"]+)"[^>]*>.*?</progress>', r'\1 percent', text, flags=re.IGNORECASE)
     text = re.sub(r'<meter[^>]*value="([^"]+)"[^>]*>(.*?)</meter>', r'\2', text, flags=re.IGNORECASE)
 
-    # 5. Nested image links and standalone images
+    # 6. Nested image links and standalone images
     text = re.sub(r'\[!\[.*?\]\(.*?\)\]\(.*?\)', '', text)
     text = re.sub(r'!\[.*?\]\(.*?\)', '', text)
 
-    # 6. Currency expressions ($100, $5.50) BEFORE LaTeX math parsing
-    text = re.sub(r'\$(\d+)\.(\d{2})\b', r'\1 dollars and \2 cents', text)
-    text = re.sub(r'\$(\d+)\b', r'\1 dollars', text)
+    # 7. Escaped currency expressions (e.g. \$100, \$5.50)
+    text = re.sub(r'\\\$(\d+)\.(\d{2})\b', r'\1 dollars and \2 cents', text)
+    text = re.sub(r'\\\$(\d+)\b', r'\1 dollars', text)
 
-    # 7. Handle Display Math ($$...$$ and \[...\])
+    # 8. Unescaped currency NOT enclosed in math
+    # Currency with range (e.g. $10 to $20, $10 and $20)
+    text = re.sub(r'(?<![\$\w])\$(\d+(?:\.\d{2})?)\b(?=\s+(?:and|or|to|-|—)\s+\$\d+)', r'\1 dollars', text)
+    # Currency at end or followed by punctuation/non-math words without matching closing $
+    text = re.sub(r'(?<![\$\w])\$(\d+)\.(\d{2})\b(?![^$\n]*\$)', r'\1 dollars and \2 cents', text)
+    text = re.sub(r'(?<![\$\w])\$(\d+)\b(?![^$\n]*\$)', r'\1 dollars', text)
+
+    # 9. Handle Display Math ($$...$$ and \[...\]) BEFORE inline math
     if remove_display_equations:
         # If display math follows a colon at the end of a sentence, change the colon to a period
         text = re.sub(r':[ \t]*\n[ \t]*\$\$[\s\S]*?\$\$', '.\n\n', text)
@@ -439,7 +598,7 @@ def clean_markdown_for_tts(
         text = re.sub(r'\$\$([\s\S]*?)\$\$', _spoken_display_math, text)
         text = re.sub(r'\\\[([\s\S]*?)\\\]', _spoken_display_math, text)
 
-    # 8. Handle Inline Math ($...$ and \(...\))
+    # 10. Handle Inline Math ($...$ and \(...\))
     def handle_inline_math(m):
         if strip_inline_math:
             return ""
@@ -449,10 +608,13 @@ def clean_markdown_for_tts(
 
     text = re.sub(r'(?<!\$)\$(?!\$)([^\$\n]+?)(?<!\$)\$(?!\$)', handle_inline_math, text)
     text = re.sub(r'\\\(([^)]+)\\\)', handle_inline_math, text)
-    # Strip any stray dollar signs
+
+    # Any remaining unclosed currency or stray dollar signs
+    text = re.sub(r'(?<![\$\w])\$(\d+)\.(\d{2})\b', r'\1 dollars and \2 cents', text)
+    text = re.sub(r'(?<![\$\w])\$(\d+)\b', r'\1 dollars', text)
     text = text.replace('$', '')
 
-    # 9. Handle Code Blocks and Diagrams (``` and ~~~)
+    # 11. Handle Code Blocks and Diagrams (``` and ~~~)
     def handle_code_block(m):
         lang = (m.group(1) or "").strip().lower()
         code_content = m.group(2) or ""
@@ -471,33 +633,33 @@ def clean_markdown_for_tts(
     text = re.sub(r'~~~([a-zA-Z0-9_-]*)\n([\s\S]*?)~~~', handle_code_block, text)
     text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
 
-    # 10. Convert Markdown Tables into spoken sentences
+    # 12. Convert Markdown Tables into spoken sentences
     table_pattern = re.compile(r'(?:^[ \t]*\|.*\|[ \t]*$\n?)+', re.MULTILINE)
     text = table_pattern.sub(lambda m: convert_markdown_table_to_sentences(m.group(0)), text)
 
-    # 11. GitHub-style Alert Callouts (> [!NOTE], > [!WARNING], etc.)
+    # 13. GitHub-style Alert Callouts (> [!NOTE], > [!WARNING], etc.)
     text = re.sub(r'^\s*>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', r'\1:', text, flags=re.MULTILINE | re.IGNORECASE)
 
-    # 12. Checklists / Tasks
+    # 14. Checklists / Tasks
     text = re.sub(r'^\s*[-*]\s*\[x\]\s*', 'Completed: ', text, flags=re.MULTILINE | re.IGNORECASE)
     text = re.sub(r'^\s*[-*]\s*\[\s*\]\s*', 'Task: ', text, flags=re.MULTILINE)
 
-    # 13. Strip remaining HTML tags and decode HTML entities
+    # 15. Strip remaining HTML tags and decode HTML entities
     text = re.sub(r'</?[a-zA-Z][a-zA-Z0-9]*(?:\s+[^>]*)?/?>', ' ', text)
     text = html.unescape(text)
 
-    # 14. Academic Citations & Footnotes
+    # 16. Academic Citations & Footnotes
     text = re.sub(r'\(\s*(?:e\.g\.|see)\s*\[[\d\s,–\-—]+\]\s*\)', '', text, flags=re.IGNORECASE)
     text = re.sub(r'^\s*\[\^[0-9]+\]:\s*', 'Footnote: ', text, flags=re.MULTILINE)
     text = re.sub(r'\[\^[0-9]+\]', '', text)
     text = re.sub(r'\[[\d\s,–\-—]+\]', '', text)
 
-    # 15. Markdown Links and Standalone URLs
+    # 17. Markdown Links and Standalone URLs
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
     text = re.sub(r'\[\s*\]\([^)]*\)', '', text)
     text = re.sub(r'https?://\S+', '', text)
 
-    # 16. Inline Code (`code`)
+    # 18. Inline Code (`code`)
     def repl_inline_code(m):
         code = m.group(1).strip()
         code = code.replace('_', ' ')
@@ -508,11 +670,11 @@ def clean_markdown_for_tts(
         return code
     text = re.sub(r'`([^`\n]+)`', repl_inline_code, text)
 
-    # 17. Blockquotes and Horizontal Rules
+    # 19. Blockquotes and Horizontal Rules
     text = re.sub(r'^[ \t]*[-*_]{3,}[ \t]*$', '', text, flags=re.MULTILINE)
     text = re.sub(r'^[ \t]*>+[ \t]*', '', text, flags=re.MULTILINE)
 
-    # 18. Headers: Ensure punctuation at the end of headers
+    # 20. Headers: Ensure punctuation at the end of headers
     def handle_header(m):
         header_text = m.group(2).strip()
         if not header_text:
@@ -523,7 +685,7 @@ def clean_markdown_for_tts(
 
     text = re.sub(r'^(#{1,6})[ \t]+(.+)$', handle_header, text, flags=re.MULTILINE)
 
-    # 19. Bullet and Numbered Lists
+    # 21. Bullet and Numbered Lists
     def handle_numbered_item(m):
         num = m.group(1)
         content = m.group(2).strip()
@@ -544,20 +706,23 @@ def clean_markdown_for_tts(
     # Metadata lines (e.g. **Paper:** ... \n **Section:** ...)
     text = re.sub(r'(\*\*[A-Za-z0-9\s_-]+:\*\*.*?)\s{2,}\n', r'\1.\n\n', text)
 
-    # 20. Inline styles: bold, italics, strikethrough
+    # 22. Inline styles: bold, italics, strikethrough (respecting word boundaries)
     text = re.sub(r'~~(.*?)~~', r'\1', text)
     text = re.sub(r'\*\*\*(.*?)\*\*\*', r'\1', text)
     text = re.sub(r'___(.*?)___', r'\1', text)
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    text = re.sub(r'__(.*?)__', r'\1', text)
+    text = re.sub(r'(?<!\w)__(?!\s)(.+?)(?<!\s)__(?!\w)', r'\1', text)
     text = re.sub(r'\*(.*?)\*', r'\1', text)
-    text = re.sub(r'_(.*?)_', r'\1', text)
+    text = re.sub(r'(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)', r'\1', text)
     text = text.replace('*', '')
 
-    # 21. Emojis and graphical icons
+    # Convert remaining underscores in filename-like or code-like patterns to spaces
+    text = re.sub(r'(\w)_(\w)', r'\1 \2', text)
+
+    # 23. Emojis and graphical icons
     text = remove_emojis(text)
 
-    # 22. Punctuation & Whitespace cleanup
+    # 24. Punctuation & Whitespace cleanup
     text = text.replace('“', '"').replace('”', '"')
     text = text.replace('‘', "'").replace('’', "'")
     text = text.replace('—', ' - ').replace('–', ' - ')
@@ -565,8 +730,14 @@ def clean_markdown_for_tts(
     # Remove quotes around entire lines if present
     text = re.sub(r'^[ \t]*["\']+(.+?)["\']+[ \t]*$', r'\1', text, flags=re.MULTILINE)
 
-    # Deduplicate repeated phrases in parentheses (e.g., "missing transverse energy (missing transverse energy)")
-    text = re.sub(r'\b([A-Za-z\s]{4,})\s*\(\1\)', r'\1', text, flags=re.IGNORECASE)
+    # Deduplicate repeated phrases in parentheses (e.g. "arcseconds (arcseconds)", "arcminutes (arcminutes)")
+    text = re.sub(r'\b([A-Za-z\s]{3,})\s*\(\s*\1\s*\)', r'\1', text, flags=re.IGNORECASE)
+
+    # Fix spaces inside parentheses and brackets
+    text = re.sub(r'\(\s+', '(', text)
+    text = re.sub(r'\s+\)', ')', text)
+    text = re.sub(r'\[\s+', '[', text)
+    text = re.sub(r'\s+\]', ']', text)
 
     # Fix punctuation glitches
     text = re.sub(r':\s*\.', '.', text)
@@ -652,7 +823,9 @@ def clean_bengali_math_plain(expr: str, strip_all: bool = False) -> str:
         return ""
 
     s = expr.strip()
-    if s.startswith('$') and s.endswith('$'):
+    if s.startswith('$$') and s.endswith('$$'):
+        s = s[2:-2].strip()
+    elif s.startswith('$') and s.endswith('$'):
         s = s[1:-1].strip()
 
     # Check if expression ends in a scalar value after calculus, e.g. = 2
@@ -660,8 +833,8 @@ def clean_bengali_math_plain(expr: str, strip_all: bool = False) -> str:
     if m_calc and any(k in s for k in [r'\int', r'\cos', r'\sin', r'\sec', r'\tan']):
         return m_calc.group(1)
 
-    # 1. Un-nest text wrappers
-    s = re.sub(r'\\(?:text|mathrm|mathbf|mathit|operatorname|rm)\{([^}]+)\}', r'\1', s)
+    # 1. Un-nest text wrappers with balanced braces
+    s = unwrap_font_wrappers(s)
     s = re.sub(r'\\rm(?![a-zA-Z])', '', s)
 
     # 2. Astrophysics and physics symbols
@@ -682,10 +855,8 @@ def clean_bengali_math_plain(expr: str, strip_all: bool = False) -> str:
     # 4. Standard trig / calculus functions
     s = re.sub(r'\\(sin|cos|tan|sec|csc|cot|log|ln|exp)(?![a-zA-Z])', r'\1 ', s)
 
-    # 5. Fractions (up to 3 levels)
-    for _ in range(3):
-        s = re.sub(r'\\frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1/\2)', s)
-    s = re.sub(r'\\frac\s*\{?([a-zA-Z0-9]+)\}?\s*\{?([a-zA-Z0-9]+)\}?', r'(\1/\2)', s)
+    # 5. Fractions (using balanced braces)
+    s = replace_fractions(s, bengali=True)
 
     # 6. Math relations
     s = re.sub(r'\\ll(?![a-zA-Z])', '<<', s)
@@ -699,12 +870,16 @@ def clean_bengali_math_plain(expr: str, strip_all: bool = False) -> str:
     s = re.sub(r'\\pm(?![a-zA-Z])', '±', s)
     s = re.sub(r'\\infty(?![a-zA-Z])', 'infinity', s)
 
-    # 7. Greek letters
+    # 7. Greek letters (support subscripts like \theta_E)
     for grk, rep in GREEK_LETTERS.items():
-        s = re.sub(rf'\\{grk}(?![a-zA-Z])', rep, s)
+        s = re.sub(r'\\' + grk + r'(?![a-zA-Z])', rep, s)
 
     # 8. Roots
-    s = re.sub(r'\\sqrt\{([^{}]+)\}', r'sqrt(\1)', s)
+    for _ in range(3):
+        if r'\sqrt' not in s:
+            break
+        s = re.sub(r'\\sqrt\[([^\]]+)\]\{([^{}]+)\}', r'root(\1, \2)', s)
+        s = re.sub(r'\\sqrt\{([^{}]+)\}', r'sqrt(\1)', s)
 
     # 9. Clean delimiters & braces
     s = re.sub(r'\\left\(|\\right\)', '', s)
@@ -742,7 +917,15 @@ def clean_bengali_markdown(
     # 1. Strip YAML frontmatter
     text = re.sub(r'^---\s*\n.*?\n---\s*\n', '', text, flags=re.DOTALL)
 
-    # 2. Strip HTML comments, control chars, media
+    # 2. Strip AI agent / tool execution logs
+    text = re.sub(
+        r'^[ \t]*(?:Ran\s+.*|Analyzed\s+.*(?::L\d+.*)?|Viewed\s+.*|Inspected\s+.*|Checked\s+.*|Read\s+.*)(?:\s*·\s*Exited with code\s+\d+)?$\n?',
+        '',
+        text,
+        flags=re.MULTILINE
+    )
+
+    # 3. Strip HTML comments, control chars, media
     text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
     text = re.sub(r'[\ufffd\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+', '', text)
     text = re.sub(r'<(?:svg|video|audio|progress|meter)\b[^>]*>.*?</(?:svg|video|audio|progress|meter)>', '', text, flags=re.DOTALL | re.IGNORECASE)
@@ -867,9 +1050,9 @@ def clean_bengali_markdown(
     text = re.sub(r'\*\*\*(.*?)\*\*\*', r'\1', text)
     text = re.sub(r'___(.*?)___', r'\1', text)
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    text = re.sub(r'__(.*?)__', r'\1', text)
+    text = re.sub(r'(?<!\w)__(?!\s)(.+?)(?<!\s)__(?!\w)', r'\1', text)
     text = re.sub(r'\*(.*?)\*', r'\1', text)
-    text = re.sub(r'_(.*?)_', r'\1', text)
+    text = re.sub(r'(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)', r'\1', text)
     text = text.replace('*', '')
 
     # 16. Emojis and symbols

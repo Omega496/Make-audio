@@ -19,11 +19,21 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
-from pdf.cleaner import (
-    clean_markdown_for_tts,
-    clean_bengali_markdown,
-    is_bengali_text,
-)
+try:
+    from pdf.cleaner import (
+        clean_markdown_for_tts,
+        clean_bengali_markdown,
+        is_bengali_text,
+    )
+except ModuleNotFoundError:
+    src_dir = Path(__file__).resolve().parent.parent
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    from pdf.cleaner import (
+        clean_markdown_for_tts,
+        clean_bengali_markdown,
+        is_bengali_text,
+    )
 
 SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt"}
 IGNORE_FILENAMES = {"requirements.txt", "constraints.txt"}

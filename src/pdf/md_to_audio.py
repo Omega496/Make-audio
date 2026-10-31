@@ -18,11 +18,21 @@ import time
 from pathlib import Path
 from typing import List
 
-from pdf.cleaner import clean_markdown_for_tts
-from pdf.colab_tts import ColabTTS, ColabTTSError
-from pdf.pdf_extractor import extract_text_from_pdf
-from pdf.player import play_audio_in_terminal
-from pdf.tts import KokoroTTS
+try:
+    from pdf.cleaner import clean_markdown_for_tts
+    from pdf.colab_tts import ColabTTS, ColabTTSError
+    from pdf.pdf_extractor import extract_text_from_pdf
+    from pdf.player import play_audio_in_terminal
+    from pdf.tts import KokoroTTS
+except ModuleNotFoundError:
+    src_dir = Path(__file__).resolve().parent.parent
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    from pdf.cleaner import clean_markdown_for_tts
+    from pdf.colab_tts import ColabTTS, ColabTTSError
+    from pdf.pdf_extractor import extract_text_from_pdf
+    from pdf.player import play_audio_in_terminal
+    from pdf.tts import KokoroTTS
 
 SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt", ".pdf"}
 IGNORE_FILENAMES = {"requirements.txt", "constraints.txt"}

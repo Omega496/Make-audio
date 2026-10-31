@@ -241,6 +241,78 @@ def test_bengali_clean_cli_and_example_file():
     print("✓ test_bengali_clean_cli_and_example_file passed")
 
 
+def test_tool_execution_logs_stripped():
+    """Verify AI agent tool logs like 'Ran ...' or 'Analyzed ...' are stripped."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_file = Path(tmpdir) / "chat_export.md"
+        input_file.write_text(
+            "Ran list files in workspace\n"
+            "Analyzed README.md:L1-24\n"
+            "Ran inspect 2_2020_python_tutorial.ipynb cells\n"
+            "Ran list installed pip packages · Exited with code 127\n\n"
+            "# 1. Real Content\n\n"
+            "Here is the actual discussion.\n",
+            encoding="utf-8",
+        )
+        main([str(input_file)])
+        cleaned = (Path(tmpdir) / "chat_export_cleaned.md").read_text(encoding="utf-8")
+        assert "Ran list files" not in cleaned
+        assert "Analyzed README.md" not in cleaned
+        assert "Exited with code 127" not in cleaned
+        assert "1. Real Content." in cleaned
+        assert "Here is the actual discussion." in cleaned
+    print("✓ test_tool_execution_logs_stripped passed")
+
+
+def test_math_not_confused_with_currency_and_astronomy_units():
+    """Verify that numbers in LaTeX math are not converted to 'dollars', and units/fractions convert cleanly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_file = Path(tmpdir) / "astronomy.md"
+        input_file.write_text(
+            "# Lensing Units\n\n"
+            "- $1 \\text{ circle} = 360^\\circ$ (degrees)\n"
+            "- $1^\\circ = 60'$ (arcminutes)\n"
+            "- $1' = 60''$ (arcseconds) $\\implies 1^\\circ = 3600''$\n"
+            "- Pixel scale is $0.04''/\\text{pixel}$.\n"
+            "- Radius is $\\theta_E = 15 \\times 0.04'' = 0.6''$.\n"
+            "- An Einstein ring is $30$ pixels across.\n"
+            "- $5 \\text{ km}$ and $15 \\text{ km}$ distance: $15 - 5 = 10 \\text{ km}$.\n"
+            "- Ratio is $\\frac{D_{ls}}{D_s}$.\n"
+            "- Over $100\\%$ error.\n"
+            "- Display equation:\n"
+            "$$1 + z = \\frac{\\lambda_{\\text{observed}}}{\\lambda_{\\text{emitted}}}$$\n\n"
+            "He paid $100 for dinner and between $10 and $20 for dessert.\n",
+            encoding="utf-8",
+        )
+        main([str(input_file)])
+        cleaned = (Path(tmpdir) / "astronomy_cleaned.md").read_text(encoding="utf-8")
+
+        # Verify no false "dollars" in math
+        assert " 1 dollars" not in cleaned
+        assert " 30 dollars" not in cleaned
+        assert "0 dollars and 04 cents" not in cleaned
+        assert " 5 dollars" not in cleaned
+        assert " 15 dollars" not in cleaned
+        assert "100 dollars" in cleaned, "Actual currency $100 should be converted to 100 dollars!"
+        assert "10 dollars" in cleaned, "Actual currency range $10 should be converted to 10 dollars!"
+        assert "20 dollars" in cleaned, "Actual currency range $20 should be converted to 20 dollars!"
+
+        # Verify math conversions
+        assert "1 circle equals 360 degrees" in cleaned
+        assert "1 degree equals 60 arcminutes" in cleaned
+        assert "1 arcminute equals 60 arcseconds" in cleaned
+        assert "0.04 arcseconds per pixel" in cleaned
+        assert "theta E equals 15 times 0.04 arcseconds equals 0.6 arcseconds" in cleaned
+        assert "30 pixels across" in cleaned
+        assert "5 kilometers" in cleaned
+        assert "15 minus 5 equals 10 kilometers" in cleaned
+        assert "(D l s over D s)" in cleaned
+        assert "100 percent" in cleaned
+        # Display math was removed
+        assert "\\lambda" not in cleaned
+    print("✓ test_math_not_confused_with_currency_and_astronomy_units passed")
+
+
 if __name__ == "__main__":
     test_default_output_naming()
     test_latex_equations_cleaning()
@@ -250,4 +322,6 @@ if __name__ == "__main__":
     test_batch_directory_and_skips_cleaned()
     test_bengali_cleaning_and_auto_detection()
     test_bengali_clean_cli_and_example_file()
+    test_tool_execution_logs_stripped()
+    test_math_not_confused_with_currency_and_astronomy_units()
     print("\nAll clean_md & bengali_clean tests passed successfully!")
